@@ -274,6 +274,7 @@ class ResearchAgent:
         temperature: float,
         max_tokens: int,
         timeout: int,
+        purpose: str = "reasoning",
     ) -> Dict[str, Any]:
         """Run a text-only LLM completion via the shared adapter."""
         response = self.llm_adapter.call_text(
@@ -281,6 +282,7 @@ class ResearchAgent:
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=timeout,
+            purpose=purpose,
         )
         if response.provider == "error":
             raise RuntimeError(response.content or "LLM completion failed")
@@ -321,6 +323,7 @@ Return a JSON object:
                 temperature=0.3,
                 max_tokens=400,
                 timeout=step_timeout,
+                purpose="data",
             )
             raw = completion["content"]
             tokens = completion["tokens"]
@@ -449,6 +452,7 @@ Use Markdown formatting.  Be concise but thorough.
                 temperature=0.3,
                 max_tokens=2000,
                 timeout=step_timeout,
+                purpose="reasoning",
             )
             content = completion["content"]
             tokens = completion["tokens"]

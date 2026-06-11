@@ -60,6 +60,92 @@ class HistoryService:
             db_manager: Database manager (optional, defaults to singleton instance)
         """
         self.db = db_manager or DatabaseManager.get_instance()
+
+    @staticmethod
+    def _news_date(value: Any) -> Optional[date]:
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        return None
+
+    @staticmethod
+    def _news_date_text(value: Any) -> Optional[str]:
+        parsed = HistoryService._news_date(value)
+        return parsed.isoformat() if parsed else None
+
+    @staticmethod
+    def _news_freshness_label(published: Optional[date], *, anchor_date: Optional[date] = None) -> str:
+        if published is None:
+            return "No date from source"
+        anchor = anchor_date or datetime.now().date()
+        age_days = (anchor - published).days
+        if age_days < 0:
+            return "Future-dated"
+        if age_days == 0:
+            return "Today"
+        if age_days == 1:
+            return "Yesterday"
+        return f"{age_days} days old"
+
+    @staticmethod
+    def _news_relevance_metadata(record: Any) -> Dict[str, str]:
+        dimension = str(getattr(record, "dimension", "") or "").strip().lower()
+        source = str(getattr(record, "source", "") or getattr(record, "provider", "") or "").strip()
+        published = HistoryService._news_date(getattr(record, "published_date", None))
+        freshness = HistoryService._news_freshness_label(published)
+        source_lower = source.lower()
+
+        if dimension == "earnings":
+            label = "Thesis catalyst"
+            reason = "Earnings, revenue, margin, or guidance evidence can change the stock thesis even when it is not breaking news."
+        elif dimension == "announcements" or "sec" in source_lower:
+            label = "Official evidence"
+            reason = "Official filings and company announcements are high-confidence source material for the analysis."
+        elif dimension == "risk_check":
+            label = "Risk flag"
+            reason = "This item was collected to check for lawsuits, insider selling, negative events, or other thesis risks."
+        elif dimension == "market_analysis":
+            label = "Analyst context"
+            reason = "This item adds outside market or analyst context, but should be weighed below official filings."
+        elif dimension == "industry":
+            label = "Theme context"
+            reason = "This item helps explain the sector, competition, or narrative behind the move."
+        elif published is not None and (datetime.now().date() - published).days <= 3:
+            label = "Fresh news"
+            reason = "This was published inside the app's latest-news window."
+        else:
+            label = "Related context"
+            reason = "This is connected to the ticker, but it is supporting context rather than a fresh catalyst."
+
+        return {
+            "dimension": dimension or "latest_news",
+            "source": source,
+            "published_date": HistoryService._news_date_text(getattr(record, "published_date", None)) or "",
+            "relevance_label": label,
+            "relevance_reason": reason,
+            "freshness_label": freshness,
+        }
+
+    @staticmethod
+    def _is_news_relevant_for_report(record: Any, *, anchor_date: date, latest_window_days: int) -> bool:
+        published = HistoryService._news_date(getattr(record, "published_date", None))
+        if published is None:
+            return False
+
+        latest_allowed = anchor_date + timedelta(days=1)
+        latest_earliest = anchor_date - timedelta(days=max(0, latest_window_days - 1))
+        if latest_earliest <= published <= latest_allowed:
+            return True
+
+        dimension = str(getattr(record, "dimension", "") or "").strip().lower()
+        source = str(getattr(record, "source", "") or getattr(record, "provider", "") or "").strip().lower()
+        catalyst_dimensions = {"announcements", "earnings", "risk_check", "market_analysis", "industry"}
+        if dimension in catalyst_dimensions or "sec" in source:
+            catalyst_earliest = anchor_date - timedelta(days=90)
+            return catalyst_earliest <= published <= latest_allowed
+
+        return False
     
     def get_history_list(
         self,
@@ -327,10 +413,12 @@ class HistoryService:
                 snippet = (record.snippet or "").strip()
                 if len(snippet) > 200:
                     snippet = f"{snippet[:197]}..."
+                metadata = self._news_relevance_metadata(record)
                 items.append({
                     "title": record.title,
                     "snippet": snippet,
                     "url": record.url,
+                    **metadata,
                 })
 
             return items
@@ -406,15 +494,11 @@ class HistoryService:
 
         filtered = []
         for item in matched:
-            if not item.published_date:
-                continue
-            if isinstance(item.published_date, datetime):
-                published = item.published_date.date()
-            elif isinstance(item.published_date, date):
-                published = item.published_date
-            else:
-                continue
-            if earliest_allowed <= published <= latest_allowed:
+            if self._is_news_relevant_for_report(
+                item,
+                anchor_date=anchor_date,
+                latest_window_days=window_days,
+            ):
                 filtered.append(item)
 
         return filtered[:limit]

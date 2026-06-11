@@ -175,6 +175,12 @@ class NewsIntel(Base):
     requester_message_id = Column(String(64))
     requester_query = Column(String(255))
 
+    # 市场影响评分（每日批量 LLM 打分；未打分时为 NULL）
+    impact_score = Column(Integer, nullable=True)
+    impact_label = Column(String(16))  # market_moving / sector / stock_specific / noise
+    impact_reason = Column(String(255))
+    impact_scored_at = Column(DateTime, nullable=True)
+
     __table_args__ = (
         UniqueConstraint('url', name='uix_news_url'),
         Index('ix_news_code_pub', 'code', 'published_date'),
@@ -207,6 +213,330 @@ class FundamentalSnapshot(Base):
 
     def __repr__(self) -> str:
         return f"<FundamentalSnapshot(query_id={self.query_id}, code={self.code})>"
+
+
+class XOAuthAccount(Base):
+    """Connected X account used for private bookmark sync."""
+
+    __tablename__ = "x_oauth_accounts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    provider_user_id = Column(String(64), nullable=False, unique=True, index=True)
+    username = Column(String(64), index=True)
+    display_name = Column(String(128))
+    access_token = Column(Text, nullable=False)
+    refresh_token = Column(Text)
+    token_type = Column(String(32))
+    scope = Column(Text)
+    expires_at = Column(DateTime, index=True)
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    last_sync_at = Column(DateTime, index=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class ResearchSource(Base):
+    """External or manual research source, such as an X account."""
+
+    __tablename__ = "research_sources"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    platform = Column(String(32), nullable=False, index=True)
+    external_id = Column(String(128), nullable=False)
+    username = Column(String(128), index=True)
+    display_name = Column(String(255))
+    profile_url = Column(String(1000))
+    credibility_score = Column(Float, default=50.0)
+    calls_tracked = Column(Integer, default=0)
+    hit_rate = Column(Float)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint("platform", "external_id", name="uix_research_source_platform_external"),
+        Index("ix_research_source_platform_username", "platform", "username"),
+    )
+
+
+class ResearchItem(Base):
+    """Single research artifact, usually a bookmarked X post or manual idea."""
+
+    __tablename__ = "research_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_id = Column(Integer, ForeignKey("research_sources.id"), nullable=True, index=True)
+    source_type = Column(String(32), nullable=False, index=True)
+    external_id = Column(String(128), nullable=False)
+    url = Column(String(1000))
+    title = Column(String(300))
+    content = Column(Text, nullable=False)
+    published_at = Column(DateTime, index=True)
+    bookmarked_at = Column(DateTime, index=True)
+    raw_payload = Column(Text)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint("source_type", "external_id", name="uix_research_item_source_external"),
+        Index("ix_research_item_created", "created_at"),
+    )
+
+
+class ExtractedAssetMention(Base):
+    """Ticker or coin mention extracted from a research item."""
+
+    __tablename__ = "extracted_asset_mentions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    research_item_id = Column(Integer, ForeignKey("research_items.id"), nullable=True, index=True)
+    source_id = Column(Integer, ForeignKey("research_sources.id"), nullable=True, index=True)
+    asset_symbol = Column(String(32), nullable=False, index=True)
+    asset_type = Column(String(16), nullable=False, index=True)  # stock | crypto
+    direction = Column(String(16), default="neutral", index=True)
+    time_horizon = Column(String(32))
+    confidence = Column(Float, default=0.5)
+    catalyst_tags = Column(Text)
+    extracted_text = Column(Text)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "research_item_id",
+            "asset_symbol",
+            "direction",
+            name="uix_asset_mention_item_symbol_direction",
+        ),
+        Index("ix_asset_mention_symbol_type", "asset_symbol", "asset_type"),
+    )
+
+
+class SignalRun(Base):
+    """A weekly signal scan run."""
+
+    __tablename__ = "signal_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    run_type = Column(String(32), nullable=False, default="weekly", index=True)
+    status = Column(String(32), nullable=False, default="running", index=True)
+    universe = Column(String(64), nullable=False, default="us_crypto")
+    started_at = Column(DateTime, default=datetime.now, index=True)
+    completed_at = Column(DateTime, index=True)
+    parameters = Column(Text)
+    diagnostics = Column(Text)
+
+
+class SignalCandidate(Base):
+    """Ranked output candidate from a signal run."""
+
+    __tablename__ = "signal_candidates"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    signal_run_id = Column(Integer, ForeignKey("signal_runs.id"), nullable=False, index=True)
+    symbol = Column(String(32), nullable=False, index=True)
+    asset_type = Column(String(16), nullable=False, index=True)
+    name = Column(String(128))
+    # Nullable on purpose: NULL = "could not be scored" (no data), distinct from a real 0.
+    # No Python-side default — SQLAlchemy would silently turn an explicit None into it.
+    candidate_score = Column(Float, index=True)
+    checklist_status = Column(String(24), default="reject", index=True)
+    entry_zone = Column(String(128))
+    invalidation = Column(String(128))
+    risk_reward = Column(String(128))
+    source_evidence = Column(Text)
+    why_not_higher = Column(Text)
+    metrics_json = Column(Text)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+    __table_args__ = (
+        Index("ix_signal_candidate_run_score", "signal_run_id", "candidate_score"),
+        UniqueConstraint("signal_run_id", "symbol", "asset_type", name="uix_signal_candidate_run_symbol_type"),
+    )
+
+
+class SourceCallScore(Base):
+    """Forward performance score for an extracted source call."""
+
+    __tablename__ = "source_call_scores"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_id = Column(Integer, ForeignKey("research_sources.id"), nullable=False, index=True)
+    mention_id = Column(Integer, ForeignKey("extracted_asset_mentions.id"), nullable=True, index=True)
+    symbol = Column(String(32), nullable=False, index=True)
+    asset_type = Column(String(16), nullable=False, index=True)
+    direction = Column(String(16), default="neutral")
+    horizon_days = Column(Integer, default=30)
+    start_price = Column(Float)
+    end_price = Column(Float)
+    return_pct = Column(Float)
+    benchmark_return_pct = Column(Float)
+    outcome = Column(String(32), index=True)
+    evaluated_at = Column(DateTime, index=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+
+class RotationMemo(Base):
+    """Generated weekly rotation memo for the latest signal scan."""
+
+    __tablename__ = "rotation_memos"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    signal_run_id = Column(Integer, ForeignKey("signal_runs.id"), nullable=True, index=True)
+    title = Column(String(255), nullable=False)
+    summary = Column(Text, nullable=False)
+    themes_json = Column(Text)
+    generated_at = Column(DateTime, default=datetime.now, index=True)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+
+class MarketBreadthDaily(Base):
+    """Daily cached market breadth snapshot for regime analysis."""
+
+    __tablename__ = "market_breadth_daily"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    as_of = Column(Date, nullable=False, index=True)
+    universe = Column(String(64), nullable=False, default="us_stocks", index=True)
+    status = Column(String(32), nullable=False, default="completed", index=True)
+    source = Column(String(64), default="daily_cache")
+    generated_at = Column(DateTime, default=datetime.now, index=True)
+    symbols_requested = Column(Integer, default=0)
+    symbols_scanned = Column(Integer, default=0)
+    symbols_with_data = Column(Integer, default=0)
+    symbols_passing_liquidity = Column(Integer, default=0)
+    min_price = Column(Float)
+    min_avg_dollar_volume = Column(Float)
+    above_sma20_count = Column(Integer, default=0)
+    above_sma20_pct = Column(Float)
+    above_sma50_count = Column(Integer, default=0)
+    above_sma50_pct = Column(Float)
+    above_sma200_count = Column(Integer, default=0)
+    above_sma200_pct = Column(Float)
+    new_high_52w_count = Column(Integer, default=0)
+    new_high_52w_pct = Column(Float)
+    new_low_52w_count = Column(Integer, default=0)
+    new_low_52w_pct = Column(Float)
+    advancers_count = Column(Integer, default=0)
+    decliners_count = Column(Integer, default=0)
+    up_volume = Column(Float)
+    down_volume = Column(Float)
+    source_counts_json = Column(Text)
+    calculation_steps_json = Column(Text)
+    sample_constituents_json = Column(Text)
+    failures_json = Column(Text)
+    warnings_json = Column(Text)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint("as_of", "universe", name="uix_market_breadth_daily_as_of_universe"),
+        Index("ix_market_breadth_daily_universe_as_of", "universe", "as_of"),
+    )
+
+
+class MarketRegimeDaily(Base):
+    """Daily persisted quantitative market regime snapshot."""
+
+    __tablename__ = "market_regime_daily"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    as_of = Column(Date, nullable=False, unique=True, index=True)
+    regime = Column(String(24), nullable=False, index=True)
+    score = Column(Float)
+    confidence = Column(String(12))
+    vix = Column(Float)
+    vix3m = Column(Float)
+    term_inverted = Column(Boolean, default=False)
+    breadth_above_50dma_pct = Column(Float)
+    components_json = Column(Text)
+    summary = Column(Text)
+    generated_at = Column(DateTime, default=datetime.now, index=True)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class SectorRotationDaily(Base):
+    """Daily persisted multi-timeframe sector rotation snapshot (RS vs SPY)."""
+
+    __tablename__ = "sector_rotation_daily"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    as_of = Column(Date, nullable=False, unique=True, index=True)
+    benchmark = Column(String(12), default="SPY")
+    universe = Column(String(64), default="us_etf_proxy")
+    symbols_total = Column(Integer, default=0)
+    symbols_ranked = Column(Integer, default=0)
+    constituents_json = Column(Text)
+    leaders_json = Column(Text)
+    warnings_json = Column(Text)
+    summary = Column(Text)
+    generated_at = Column(DateTime, default=datetime.now, index=True)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class DiscoveryDaily(Base):
+    """Daily persisted new-ideas discovery snapshot (liquidity-gated screens)."""
+
+    __tablename__ = "discovery_daily"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    as_of = Column(Date, nullable=False, unique=True, index=True)
+    universe_size = Column(Integer, default=0)
+    qualified_size = Column(Integer, default=0)
+    constituents_json = Column(Text)
+    warnings_json = Column(Text)
+    summary = Column(Text)
+    generated_at = Column(DateTime, default=datetime.now, index=True)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class DownDayRsDaily(Base):
+    """Daily persisted down-day relative-strength snapshot (what held up on a red SPY day)."""
+
+    __tablename__ = "down_day_rs_daily"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    as_of = Column(Date, nullable=False, unique=True, index=True)
+    spy_return_pct = Column(Float)
+    payload_json = Column(Text)
+    generated_at = Column(DateTime, default=datetime.now, index=True)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+class WatchlistSymbol(Base):
+    """US watchlist symbols managed via the DB (replaces RESEARCH_US_WATCHLIST env var)."""
+
+    __tablename__ = "watchlist_symbols"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    symbol = Column(String(16), nullable=False, unique=True, index=True)
+    note = Column(String(256), nullable=True)
+    # 来源: 'env_seed' (从 RESEARCH_US_WATCHLIST 一次性导入) | 'manual' | 'discovery'
+    source = Column(String(32), nullable=False, default="manual")
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+
+class MacroCycleDaily(Base):
+    """Daily persisted business-cycle phase snapshot (FRED composite + crypto gauge)."""
+
+    __tablename__ = "macro_cycle_daily"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    as_of = Column(Date, nullable=False, unique=True, index=True)
+    phase = Column(String(16), nullable=False, index=True)
+    confidence = Column(String(12))
+    scores_json = Column(Text)
+    indicators_json = Column(Text)
+    playbook_json = Column(Text)
+    divergence = Column(Boolean, default=False)
+    divergence_note = Column(Text)
+    crypto_json = Column(Text)
+    summary = Column(Text)
+    generated_at = Column(DateTime, default=datetime.now, index=True)
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
 class AnalysisHistory(Base):
@@ -691,6 +1021,7 @@ class DatabaseManager:
         
         # 创建所有表
         Base.metadata.create_all(self._engine)
+        self._ensure_sqlite_columns()
 
         self._initialized = True
         logger.info(f"数据库初始化完成: {db_url}")
@@ -751,6 +1082,35 @@ class DatabaseManager:
     def _is_file_sqlite_database(self) -> bool:
         database = (self._engine.url.database or "").strip()
         return bool(database) and database.lower() != ":memory:"
+
+    def _ensure_sqlite_columns(self) -> None:
+        """Idempotently ADD model columns missing from existing SQLite tables.
+
+        ``Base.metadata.create_all()`` only creates missing tables; it never
+        ALTERs existing ones, so new nullable columns added to a model would
+        be silently absent on upgraded installs. SQLite-only — non-SQLite
+        deployments rely on create_all for fresh installs.
+        """
+        if not self._is_sqlite_engine:
+            return
+        for table in Base.metadata.tables.values():
+            with self._engine.begin() as conn:
+                existing = {row[1] for row in conn.exec_driver_sql(f'PRAGMA table_info("{table.name}")')}
+            if not existing:
+                continue
+            for column in table.columns:
+                if column.name in existing:
+                    continue
+                col_type = column.type.compile(self._engine.dialect)
+                try:
+                    with self._engine.begin() as conn:
+                        conn.exec_driver_sql(
+                            f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {col_type}'
+                        )
+                    logger.info("SQLite schema: added %s.%s (%s)", table.name, column.name, col_type)
+                except Exception as exc:
+                    # Fail-open: a single un-addable column must not block startup.
+                    logger.warning("SQLite schema: could not add %s.%s: %s", table.name, column.name, exc)
 
     def _run_write_transaction(
         self,
@@ -974,7 +1334,7 @@ class DatabaseManager:
                     existing.fetched_at = datetime.now()
 
                     if query_context:
-                        if not existing.query_id and current_query_id:
+                        if current_query_id:
                             existing.query_id = current_query_id
                         existing.query_source = (
                             query_context.get("query_source") or existing.query_source
@@ -1567,9 +1927,436 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"保存 {code} 数据失败: {e}")
             raise
+
+    def save_market_breadth_cache(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Save or update a daily market breadth snapshot."""
+        as_of_value = self._normalize_daily_date(payload.get("as_of") or date.today())
+        universe = str(payload.get("universe") or "us_stocks")
+        now = datetime.now()
+        record = {
+            "as_of": as_of_value,
+            "universe": universe,
+            "status": payload.get("status") or "completed",
+            "source": payload.get("source") or "daily_cache",
+            "generated_at": _parse_datetime_or_now(payload.get("generated_at")),
+            "symbols_requested": int(payload.get("symbols_requested") or 0),
+            "symbols_scanned": int(payload.get("symbols_scanned") or 0),
+            "symbols_with_data": int(payload.get("symbols_with_data") or 0),
+            "symbols_passing_liquidity": int(payload.get("symbols_passing_liquidity") or 0),
+            "min_price": self._normalize_sql_value(payload.get("min_price")),
+            "min_avg_dollar_volume": self._normalize_sql_value(payload.get("min_avg_dollar_volume")),
+            "above_sma20_count": int(payload.get("above_sma20_count") or 0),
+            "above_sma20_pct": self._normalize_sql_value(payload.get("above_sma20_pct")),
+            "above_sma50_count": int(payload.get("above_sma50_count") or 0),
+            "above_sma50_pct": self._normalize_sql_value(payload.get("above_sma50_pct")),
+            "above_sma200_count": int(payload.get("above_sma200_count") or 0),
+            "above_sma200_pct": self._normalize_sql_value(payload.get("above_sma200_pct")),
+            "new_high_52w_count": int(payload.get("new_high_52w_count") or 0),
+            "new_high_52w_pct": self._normalize_sql_value(payload.get("new_high_52w_pct")),
+            "new_low_52w_count": int(payload.get("new_low_52w_count") or 0),
+            "new_low_52w_pct": self._normalize_sql_value(payload.get("new_low_52w_pct")),
+            "advancers_count": int(payload.get("advancers_count") or 0),
+            "decliners_count": int(payload.get("decliners_count") or 0),
+            "up_volume": self._normalize_sql_value(payload.get("up_volume")),
+            "down_volume": self._normalize_sql_value(payload.get("down_volume")),
+            "source_counts_json": json.dumps(payload.get("source_counts") or {}, ensure_ascii=False),
+            "calculation_steps_json": json.dumps(payload.get("calculation_steps") or [], ensure_ascii=False),
+            "sample_constituents_json": json.dumps(payload.get("sample_constituents") or [], ensure_ascii=False),
+            "failures_json": json.dumps(payload.get("failures") or [], ensure_ascii=False),
+            "warnings_json": json.dumps(payload.get("warnings") or [], ensure_ascii=False),
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        def _write(session: Session) -> Dict[str, Any]:
+            if self._is_sqlite_engine:
+                stmt = sqlite_insert(MarketBreadthDaily).values(record)
+                excluded = stmt.excluded
+                session.execute(
+                    stmt.on_conflict_do_update(
+                        index_elements=["as_of", "universe"],
+                        set_={
+                            "status": excluded.status,
+                            "source": excluded.source,
+                            "generated_at": excluded.generated_at,
+                            "symbols_requested": excluded.symbols_requested,
+                            "symbols_scanned": excluded.symbols_scanned,
+                            "symbols_with_data": excluded.symbols_with_data,
+                            "symbols_passing_liquidity": excluded.symbols_passing_liquidity,
+                            "min_price": excluded.min_price,
+                            "min_avg_dollar_volume": excluded.min_avg_dollar_volume,
+                            "above_sma20_count": excluded.above_sma20_count,
+                            "above_sma20_pct": excluded.above_sma20_pct,
+                            "above_sma50_count": excluded.above_sma50_count,
+                            "above_sma50_pct": excluded.above_sma50_pct,
+                            "above_sma200_count": excluded.above_sma200_count,
+                            "above_sma200_pct": excluded.above_sma200_pct,
+                            "new_high_52w_count": excluded.new_high_52w_count,
+                            "new_high_52w_pct": excluded.new_high_52w_pct,
+                            "new_low_52w_count": excluded.new_low_52w_count,
+                            "new_low_52w_pct": excluded.new_low_52w_pct,
+                            "advancers_count": excluded.advancers_count,
+                            "decliners_count": excluded.decliners_count,
+                            "up_volume": excluded.up_volume,
+                            "down_volume": excluded.down_volume,
+                            "source_counts_json": excluded.source_counts_json,
+                            "calculation_steps_json": excluded.calculation_steps_json,
+                            "sample_constituents_json": excluded.sample_constituents_json,
+                            "failures_json": excluded.failures_json,
+                            "warnings_json": excluded.warnings_json,
+                            "updated_at": excluded.updated_at,
+                        },
+                    )
+                )
+            else:
+                row = session.execute(
+                    select(MarketBreadthDaily).where(
+                        and_(
+                            MarketBreadthDaily.as_of == as_of_value,
+                            MarketBreadthDaily.universe == universe,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if row is None:
+                    row = MarketBreadthDaily(**record)
+                    session.add(row)
+                else:
+                    for key, value in record.items():
+                        if key == "created_at":
+                            continue
+                        setattr(row, key, value)
+            row = session.execute(
+                select(MarketBreadthDaily).where(
+                    and_(
+                        MarketBreadthDaily.as_of == as_of_value,
+                        MarketBreadthDaily.universe == universe,
+                    )
+                )
+            ).scalar_one()
+            return _market_breadth_daily_to_dict(row)
+
+        return self._run_write_transaction("save_market_breadth_cache", _write)
+
+    def get_latest_market_breadth_cache(self, *, universe: str = "us_stocks") -> Optional[Dict[str, Any]]:
+        """Return the newest cached market breadth snapshot."""
+        with self.get_session() as session:
+            row = session.execute(
+                select(MarketBreadthDaily)
+                .where(MarketBreadthDaily.universe == universe)
+                .order_by(desc(MarketBreadthDaily.as_of), desc(MarketBreadthDaily.generated_at))
+                .limit(1)
+            ).scalar_one_or_none()
+            return _market_breadth_daily_to_dict(row) if row else None
+
+    def get_market_breadth_history(self, *, days: int = 30, universe: str = "us_stocks") -> List[Dict[str, Any]]:
+        """Return cached market breadth snapshots, oldest first, within the lookback window."""
+        cutoff = date.today() - timedelta(days=max(1, days))
+        with self.get_session() as session:
+            rows = session.execute(
+                select(MarketBreadthDaily)
+                .where(
+                    and_(
+                        MarketBreadthDaily.universe == universe,
+                        MarketBreadthDaily.as_of >= cutoff,
+                    )
+                )
+                .order_by(MarketBreadthDaily.as_of)
+            ).scalars().all()
+            return [_market_breadth_daily_to_dict(row) for row in rows]
     
+    def save_market_regime_snapshot(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Save or update one quantitative regime snapshot per as-of date."""
+        as_of_value = self._normalize_daily_date(payload.get("as_of") or date.today())
+        volatility = payload.get("volatility") or {}
+        breadth = payload.get("market_breadth") or {}
+        now = datetime.now()
+        record = {
+            "as_of": as_of_value,
+            "regime": str(payload.get("regime") or "Unknown"),
+            "score": self._normalize_sql_value(payload.get("score")),
+            "confidence": str(payload.get("confidence") or ""),
+            "vix": self._normalize_sql_value(volatility.get("vix")),
+            "vix3m": self._normalize_sql_value(volatility.get("vix3m")),
+            "term_inverted": bool(volatility.get("term_inverted")),
+            "breadth_above_50dma_pct": self._normalize_sql_value(breadth.get("above_sma50_pct")),
+            "components_json": json.dumps(payload.get("components") or [], ensure_ascii=False),
+            "summary": str(payload.get("summary") or ""),
+            "generated_at": _parse_datetime_or_now(payload.get("generated_at")),
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        def _write(session: Session) -> Dict[str, Any]:
+            if self._is_sqlite_engine:
+                stmt = sqlite_insert(MarketRegimeDaily).values(record)
+                excluded = stmt.excluded
+                session.execute(
+                    stmt.on_conflict_do_update(
+                        index_elements=["as_of"],
+                        set_={
+                            "regime": excluded.regime,
+                            "score": excluded.score,
+                            "confidence": excluded.confidence,
+                            "vix": excluded.vix,
+                            "vix3m": excluded.vix3m,
+                            "term_inverted": excluded.term_inverted,
+                            "breadth_above_50dma_pct": excluded.breadth_above_50dma_pct,
+                            "components_json": excluded.components_json,
+                            "summary": excluded.summary,
+                            "generated_at": excluded.generated_at,
+                            "updated_at": excluded.updated_at,
+                        },
+                    )
+                )
+            else:
+                row = session.execute(
+                    select(MarketRegimeDaily).where(MarketRegimeDaily.as_of == as_of_value)
+                ).scalar_one_or_none()
+                if row is None:
+                    session.add(MarketRegimeDaily(**record))
+                else:
+                    for key, value in record.items():
+                        if key == "created_at":
+                            continue
+                        setattr(row, key, value)
+            row = session.execute(
+                select(MarketRegimeDaily).where(MarketRegimeDaily.as_of == as_of_value)
+            ).scalar_one()
+            return _market_regime_daily_to_dict(row)
+
+        return self._run_write_transaction("save_market_regime_snapshot", _write)
+
+    def get_market_regime_history(self, *, days: int = 90) -> List[Dict[str, Any]]:
+        """Return persisted regime snapshots, oldest first, within the lookback window."""
+        cutoff = date.today() - timedelta(days=max(1, days))
+        with self.get_session() as session:
+            rows = session.execute(
+                select(MarketRegimeDaily)
+                .where(MarketRegimeDaily.as_of >= cutoff)
+                .order_by(MarketRegimeDaily.as_of)
+            ).scalars().all()
+            return [_market_regime_daily_to_dict(row) for row in rows]
+
+    def get_latest_market_regime_snapshot(self) -> Optional[Dict[str, Any]]:
+        with self.get_session() as session:
+            row = session.execute(
+                select(MarketRegimeDaily).order_by(desc(MarketRegimeDaily.as_of)).limit(1)
+            ).scalar_one_or_none()
+            return _market_regime_daily_to_dict(row) if row else None
+
+    def _upsert_daily_snapshot_row(
+        self,
+        *,
+        model: Any,
+        as_of_value: date,
+        record: Dict[str, Any],
+        to_dict: Callable[[Any], Dict[str, Any]],
+        op_name: str,
+    ) -> Dict[str, Any]:
+        """Shared one-row-per-as_of upsert used by the daily snapshot tables."""
+
+        def _write(session: Session) -> Dict[str, Any]:
+            if self._is_sqlite_engine:
+                stmt = sqlite_insert(model).values(record)
+                excluded = stmt.excluded
+                update_cols = {
+                    key: getattr(excluded, key)
+                    for key in record
+                    if key not in {"as_of", "created_at"}
+                }
+                session.execute(
+                    stmt.on_conflict_do_update(index_elements=["as_of"], set_=update_cols)
+                )
+            else:
+                row = session.execute(
+                    select(model).where(model.as_of == as_of_value)
+                ).scalar_one_or_none()
+                if row is None:
+                    session.add(model(**record))
+                else:
+                    for key, value in record.items():
+                        if key == "created_at":
+                            continue
+                        setattr(row, key, value)
+            row = session.execute(
+                select(model).where(model.as_of == as_of_value)
+            ).scalar_one()
+            return to_dict(row)
+
+        return self._run_write_transaction(op_name, _write)
+
+    def save_sector_rotation_snapshot(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Save or update one sector rotation snapshot per as-of date."""
+        as_of_value = self._normalize_daily_date(payload.get("as_of") or date.today())
+        now = datetime.now()
+        record = {
+            "as_of": as_of_value,
+            "benchmark": str(payload.get("benchmark") or "SPY"),
+            "universe": str(payload.get("universe") or "us_etf_proxy"),
+            "symbols_total": int(payload.get("symbols_total") or 0),
+            "symbols_ranked": int(payload.get("symbols_ranked") or 0),
+            "constituents_json": json.dumps(payload.get("constituents") or [], ensure_ascii=False),
+            "leaders_json": json.dumps(payload.get("leaders") or {}, ensure_ascii=False),
+            "warnings_json": json.dumps(payload.get("warnings") or [], ensure_ascii=False),
+            "summary": str(payload.get("summary") or ""),
+            "generated_at": _parse_datetime_or_now(payload.get("generated_at")),
+            "created_at": now,
+            "updated_at": now,
+        }
+        return self._upsert_daily_snapshot_row(
+            model=SectorRotationDaily,
+            as_of_value=as_of_value,
+            record=record,
+            to_dict=_sector_rotation_daily_to_dict,
+            op_name="save_sector_rotation_snapshot",
+        )
+
+    def get_latest_sector_rotation_snapshot(self) -> Optional[Dict[str, Any]]:
+        with self.get_session() as session:
+            row = session.execute(
+                select(SectorRotationDaily).order_by(desc(SectorRotationDaily.as_of)).limit(1)
+            ).scalar_one_or_none()
+            return _sector_rotation_daily_to_dict(row) if row else None
+
+    def get_previous_sector_rotation_snapshot(self, *, before: date) -> Optional[Dict[str, Any]]:
+        """Most recent snapshot strictly before the given date (for rank-change diffs)."""
+        with self.get_session() as session:
+            row = session.execute(
+                select(SectorRotationDaily)
+                .where(SectorRotationDaily.as_of < before)
+                .order_by(desc(SectorRotationDaily.as_of))
+                .limit(1)
+            ).scalar_one_or_none()
+            return _sector_rotation_daily_to_dict(row) if row else None
+
+    def get_sector_rotation_history(self, *, days: int = 90) -> List[Dict[str, Any]]:
+        cutoff = date.today() - timedelta(days=max(1, days))
+        with self.get_session() as session:
+            rows = session.execute(
+                select(SectorRotationDaily)
+                .where(SectorRotationDaily.as_of >= cutoff)
+                .order_by(SectorRotationDaily.as_of)
+            ).scalars().all()
+            return [_sector_rotation_daily_to_dict(row) for row in rows]
+
+    def save_discovery_snapshot(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Save or update one discovery snapshot per as-of date."""
+        as_of_value = self._normalize_daily_date(payload.get("as_of") or date.today())
+        now = datetime.now()
+        record = {
+            "as_of": as_of_value,
+            "universe_size": int(payload.get("universe_size") or 0),
+            "qualified_size": int(payload.get("qualified_size") or 0),
+            "constituents_json": json.dumps(payload.get("constituents") or [], ensure_ascii=False),
+            "warnings_json": json.dumps(payload.get("warnings") or [], ensure_ascii=False),
+            "summary": str(payload.get("summary") or ""),
+            "generated_at": _parse_datetime_or_now(payload.get("generated_at")),
+            "created_at": now,
+            "updated_at": now,
+        }
+        return self._upsert_daily_snapshot_row(
+            model=DiscoveryDaily,
+            as_of_value=as_of_value,
+            record=record,
+            to_dict=_discovery_daily_to_dict,
+            op_name="save_discovery_snapshot",
+        )
+
+    def get_latest_discovery_snapshot(self) -> Optional[Dict[str, Any]]:
+        with self.get_session() as session:
+            row = session.execute(
+                select(DiscoveryDaily).order_by(desc(DiscoveryDaily.as_of)).limit(1)
+            ).scalar_one_or_none()
+            return _discovery_daily_to_dict(row) if row else None
+
+    def get_discovery_history(self, *, days: int = 90) -> List[Dict[str, Any]]:
+        cutoff = date.today() - timedelta(days=max(1, days))
+        with self.get_session() as session:
+            rows = session.execute(
+                select(DiscoveryDaily)
+                .where(DiscoveryDaily.as_of >= cutoff)
+                .order_by(DiscoveryDaily.as_of)
+            ).scalars().all()
+            return [_discovery_daily_to_dict(row) for row in rows]
+
+    def save_down_day_rs_snapshot(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Save or update one down-day relative-strength snapshot per as-of date."""
+        as_of_value = self._normalize_daily_date(payload.get("as_of") or date.today())
+        now = datetime.now()
+        spy_return = payload.get("spy_return_pct")
+        try:
+            spy_return_value = float(spy_return) if spy_return is not None else None
+        except (TypeError, ValueError):
+            spy_return_value = None
+        record = {
+            "as_of": as_of_value,
+            "spy_return_pct": spy_return_value,
+            "payload_json": json.dumps(payload, ensure_ascii=False),
+            "generated_at": _parse_datetime_or_now(payload.get("generated_at")),
+            "created_at": now,
+            "updated_at": now,
+        }
+        return self._upsert_daily_snapshot_row(
+            model=DownDayRsDaily,
+            as_of_value=as_of_value,
+            record=record,
+            to_dict=_down_day_rs_daily_to_dict,
+            op_name="save_down_day_rs_snapshot",
+        )
+
+    def get_latest_down_day_rs_snapshot(self) -> Optional[Dict[str, Any]]:
+        with self.get_session() as session:
+            row = session.execute(
+                select(DownDayRsDaily).order_by(desc(DownDayRsDaily.as_of)).limit(1)
+            ).scalar_one_or_none()
+            return _down_day_rs_daily_to_dict(row) if row else None
+
+    def save_macro_cycle_snapshot(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Save or update one macro cycle snapshot per as-of date."""
+        as_of_value = self._normalize_daily_date(payload.get("as_of") or date.today())
+        now = datetime.now()
+        record = {
+            "as_of": as_of_value,
+            "phase": str(payload.get("phase") or "unknown"),
+            "confidence": str(payload.get("confidence") or ""),
+            "scores_json": json.dumps(payload.get("scores") or {}, ensure_ascii=False),
+            "indicators_json": json.dumps(payload.get("indicators") or [], ensure_ascii=False),
+            "playbook_json": json.dumps(payload.get("playbook") or [], ensure_ascii=False),
+            "divergence": bool(payload.get("divergence")),
+            "divergence_note": str(payload.get("divergence_note") or ""),
+            "crypto_json": json.dumps(payload.get("crypto") or {}, ensure_ascii=False),
+            "summary": str(payload.get("summary") or ""),
+            "generated_at": _parse_datetime_or_now(payload.get("generated_at")),
+            "created_at": now,
+            "updated_at": now,
+        }
+        return self._upsert_daily_snapshot_row(
+            model=MacroCycleDaily,
+            as_of_value=as_of_value,
+            record=record,
+            to_dict=_macro_cycle_daily_to_dict,
+            op_name="save_macro_cycle_snapshot",
+        )
+
+    def get_latest_macro_cycle_snapshot(self) -> Optional[Dict[str, Any]]:
+        with self.get_session() as session:
+            row = session.execute(
+                select(MacroCycleDaily).order_by(desc(MacroCycleDaily.as_of)).limit(1)
+            ).scalar_one_or_none()
+            return _macro_cycle_daily_to_dict(row) if row else None
+
+    def get_macro_cycle_history(self, *, days: int = 180) -> List[Dict[str, Any]]:
+        cutoff = date.today() - timedelta(days=max(1, days))
+        with self.get_session() as session:
+            rows = session.execute(
+                select(MacroCycleDaily)
+                .where(MacroCycleDaily.as_of >= cutoff)
+                .order_by(MacroCycleDaily.as_of)
+            ).scalars().all()
+            return [_macro_cycle_daily_to_dict(row) for row in rows]
+
     def get_analysis_context(
-        self, 
+        self,
         code: str,
         target_date: Optional[date] = None
     ) -> Optional[Dict[str, Any]]:
@@ -2109,6 +2896,64 @@ class DatabaseManager:
             ],
         }
 
+    # ------------------------------------------------------------------
+    # Watchlist (watchlist_symbols table)
+    # ------------------------------------------------------------------
+
+    def get_watchlist_symbols(self) -> List[Dict[str, Any]]:
+        """Return all watchlist rows ordered by created_at then symbol."""
+        with self.get_session() as session:
+            rows = session.execute(
+                select(WatchlistSymbol).order_by(WatchlistSymbol.created_at, WatchlistSymbol.symbol)
+            ).scalars().all()
+            return [
+                {
+                    "symbol": row.symbol,
+                    "note": row.note,
+                    "source": row.source,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                }
+                for row in rows
+            ]
+
+    def add_watchlist_symbol(
+        self,
+        symbol: str,
+        note: Optional[str] = None,
+        source: str = "manual",
+    ) -> Dict[str, Any]:
+        """Insert symbol if not already present (idempotent). Returns the final row."""
+        symbol = symbol.strip().upper()
+
+        def _write(session: Session) -> Dict[str, Any]:
+            row = session.execute(
+                select(WatchlistSymbol).where(WatchlistSymbol.symbol == symbol)
+            ).scalar_one_or_none()
+            if row is None:
+                row = WatchlistSymbol(symbol=symbol, note=note, source=source)
+                session.add(row)
+                session.flush()
+            return {
+                "symbol": row.symbol,
+                "note": row.note,
+                "source": row.source,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+
+        return self._run_write_transaction("add_watchlist_symbol", _write)
+
+    def remove_watchlist_symbol(self, symbol: str) -> bool:
+        """Delete a symbol from the watchlist. Returns True if a row was deleted."""
+        symbol = symbol.strip().upper()
+
+        def _write(session: Session) -> bool:
+            result = session.execute(
+                delete(WatchlistSymbol).where(WatchlistSymbol.symbol == symbol)
+            )
+            return result.rowcount > 0
+
+        return self._run_write_transaction("remove_watchlist_symbol", _write)
+
 
 # 便捷函数
 def get_db() -> DatabaseManager:
@@ -2135,6 +2980,152 @@ def persist_llm_usage(
         )
     except Exception as exc:
         logging.getLogger(__name__).warning("[LLM usage] failed to persist usage record: %s", exc)
+
+
+def _parse_datetime_or_now(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and value.strip():
+        candidate = value.strip().replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(candidate)
+            return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+        except ValueError:
+            pass
+    return datetime.now()
+
+
+def _json_loads(value: Optional[str], default: Any) -> Any:
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _market_breadth_daily_to_dict(row: MarketBreadthDaily) -> Dict[str, Any]:
+    return {
+        "id": row.id,
+        "as_of": row.as_of.isoformat() if row.as_of else None,
+        "universe": row.universe,
+        "status": row.status,
+        "source": row.source,
+        "generated_at": row.generated_at.isoformat() if row.generated_at else None,
+        "symbols_requested": row.symbols_requested or 0,
+        "symbols_scanned": row.symbols_scanned or 0,
+        "symbols_with_data": row.symbols_with_data or 0,
+        "symbols_passing_liquidity": row.symbols_passing_liquidity or 0,
+        "min_price": row.min_price,
+        "min_avg_dollar_volume": row.min_avg_dollar_volume,
+        "above_sma20_count": row.above_sma20_count or 0,
+        "above_sma20_pct": row.above_sma20_pct,
+        "above_sma50_count": row.above_sma50_count or 0,
+        "above_sma50_pct": row.above_sma50_pct,
+        "above_sma200_count": row.above_sma200_count or 0,
+        "above_sma200_pct": row.above_sma200_pct,
+        "new_high_52w_count": row.new_high_52w_count or 0,
+        "new_high_52w_pct": row.new_high_52w_pct,
+        "new_low_52w_count": row.new_low_52w_count or 0,
+        "new_low_52w_pct": row.new_low_52w_pct,
+        "advancers_count": row.advancers_count or 0,
+        "decliners_count": row.decliners_count or 0,
+        "up_volume": row.up_volume,
+        "down_volume": row.down_volume,
+        "source_counts": _json_loads(row.source_counts_json, {}),
+        "calculation_steps": _json_loads(row.calculation_steps_json, []),
+        "sample_constituents": _json_loads(row.sample_constituents_json, []),
+        "failures": _json_loads(row.failures_json, []),
+        "warnings": _json_loads(row.warnings_json, []),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _market_regime_daily_to_dict(row: MarketRegimeDaily) -> Dict[str, Any]:
+    return {
+        "id": row.id,
+        "as_of": row.as_of.isoformat() if row.as_of else None,
+        "regime": row.regime,
+        "score": row.score,
+        "confidence": row.confidence,
+        "vix": row.vix,
+        "vix3m": row.vix3m,
+        "term_inverted": bool(row.term_inverted),
+        "breadth_above_50dma_pct": row.breadth_above_50dma_pct,
+        "components": _json_loads(row.components_json, []),
+        "summary": row.summary,
+        "generated_at": row.generated_at.isoformat() if row.generated_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _sector_rotation_daily_to_dict(row: SectorRotationDaily) -> Dict[str, Any]:
+    return {
+        "id": row.id,
+        "as_of": row.as_of.isoformat() if row.as_of else None,
+        "benchmark": row.benchmark,
+        "universe": row.universe,
+        "symbols_total": row.symbols_total or 0,
+        "symbols_ranked": row.symbols_ranked or 0,
+        "constituents": _json_loads(row.constituents_json, []),
+        "leaders": _json_loads(row.leaders_json, {}),
+        "warnings": _json_loads(row.warnings_json, []),
+        "summary": row.summary,
+        "generated_at": row.generated_at.isoformat() if row.generated_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _discovery_daily_to_dict(row: DiscoveryDaily) -> Dict[str, Any]:
+    return {
+        "id": row.id,
+        "as_of": row.as_of.isoformat() if row.as_of else None,
+        "universe_size": row.universe_size or 0,
+        "qualified_size": row.qualified_size or 0,
+        "constituents": _json_loads(row.constituents_json, []),
+        "warnings": _json_loads(row.warnings_json, []),
+        "summary": row.summary,
+        "generated_at": row.generated_at.isoformat() if row.generated_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _down_day_rs_daily_to_dict(row: DownDayRsDaily) -> Dict[str, Any]:
+    payload = _json_loads(row.payload_json, {})
+    if not isinstance(payload, dict):
+        payload = {}
+    payload.update({
+        "id": row.id,
+        "as_of": row.as_of.isoformat() if row.as_of else None,
+        "spy_return_pct": row.spy_return_pct,
+        "generated_at": row.generated_at.isoformat() if row.generated_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    })
+    return payload
+
+
+def _macro_cycle_daily_to_dict(row: MacroCycleDaily) -> Dict[str, Any]:
+    return {
+        "id": row.id,
+        "as_of": row.as_of.isoformat() if row.as_of else None,
+        "phase": row.phase,
+        "confidence": row.confidence,
+        "scores": _json_loads(row.scores_json, {}),
+        "indicators": _json_loads(row.indicators_json, []),
+        "playbook": _json_loads(row.playbook_json, []),
+        "divergence": bool(row.divergence),
+        "divergence_note": row.divergence_note,
+        "crypto": _json_loads(row.crypto_json, {}),
+        "summary": row.summary,
+        "generated_at": row.generated_at.isoformat() if row.generated_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
 
 
 if __name__ == "__main__":

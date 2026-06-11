@@ -31,22 +31,22 @@ logger = logging.getLogger(__name__)
 
 # Tool name → friendly label for progress messages
 _THINKING_TOOL_LABELS: Dict[str, str] = {
-    "get_realtime_quote": "行情获取",
-    "get_daily_history": "K线数据获取",
-    "analyze_trend": "技术指标分析",
-    "get_chip_distribution": "筹码分布分析",
-    "search_stock_news": "新闻搜索",
-    "search_comprehensive_intel": "综合情报搜索",
-    "get_market_indices": "市场概览获取",
-    "get_sector_rankings": "行业板块分析",
-    "get_analysis_context": "历史分析上下文",
-    "get_stock_info": "基本信息获取",
-    "analyze_pattern": "K线形态识别",
-    "get_volume_analysis": "量能分析",
-    "calculate_ma": "均线计算",
-    "get_skill_backtest_summary": "技能回测概览",
-    "get_strategy_backtest_summary": "策略回测概览",
-    "get_stock_backtest_summary": "个股回测数据",
+    "get_realtime_quote": "Quote fetch",
+    "get_daily_history": "Daily bar fetch",
+    "analyze_trend": "Technical trend analysis",
+    "get_chip_distribution": "Holder distribution analysis",
+    "search_stock_news": "News search",
+    "search_comprehensive_intel": "Intelligence search",
+    "get_market_indices": "Market overview fetch",
+    "get_sector_rankings": "Sector ranking analysis",
+    "get_analysis_context": "Historical context fetch",
+    "get_stock_info": "Company profile fetch",
+    "analyze_pattern": "Candle pattern detection",
+    "get_volume_analysis": "Volume analysis",
+    "calculate_ma": "Moving average calculation",
+    "get_skill_backtest_summary": "Skill backtest summary",
+    "get_strategy_backtest_summary": "Strategy backtest summary",
+    "get_stock_backtest_summary": "Stock backtest data",
 }
 
 
@@ -299,6 +299,93 @@ def _remaining_timeout_seconds(
     return max(0.0, float(max_wall_clock_seconds) - (time.time() - start_time))
 
 
+def _truncate_text(text: str, *, max_chars: int = 50000) -> str:
+    """Keep final-synthesis prompts bounded without losing latest evidence."""
+    if len(text) <= max_chars:
+        return text
+    keep_head = max_chars // 4
+    keep_tail = max_chars - keep_head
+    return (
+        text[:keep_head]
+        + "\n\n[... earlier transcript truncated for length ...]\n\n"
+        + text[-keep_tail:]
+    )
+
+
+def _render_message_for_synthesis(message: Dict[str, Any]) -> str:
+    """Render one internal message into a compact final-synthesis transcript."""
+    role = str(message.get("role") or "user")
+    name = str(message.get("name") or "")
+    label = f"{role}:{name}" if name else role
+
+    content = message.get("content")
+    if isinstance(content, (dict, list)):
+        try:
+            content_text = json.dumps(content, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            content_text = str(content)
+    else:
+        content_text = str(content or "")
+
+    tool_calls = message.get("tool_calls")
+    tool_text = ""
+    if tool_calls:
+        try:
+            tool_text = "\nTool calls requested:\n" + json.dumps(tool_calls, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            tool_text = f"\nTool calls requested:\n{tool_calls}"
+
+    body = (content_text + tool_text).strip()
+    return f"[{label}]\n{body}" if body else f"[{label}]"
+
+
+def _build_final_synthesis_messages(
+    messages: List[Dict[str, Any]],
+    draft_answer: str,
+) -> List[Dict[str, str]]:
+    """Build the strict reasoning-model prompt from the loop transcript."""
+    transcript = "\n\n".join(_render_message_for_synthesis(m) for m in messages)
+    user_payload = _truncate_text(
+        "Conversation, tool results, and draft answer:\n\n"
+        f"{transcript}\n\n"
+        "[draft answer]\n"
+        f"{draft_answer.strip()}"
+    )
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are the final investment analyst for this app. Use only the "
+                "provided conversation, tool results, and draft answer. Reply in "
+                "English unless the user explicitly requested another language. "
+                "Respect exact wording or format constraints from the user; if the "
+                "draft already satisfies an exact-reply instruction, return it "
+                "unchanged. Do not mention internal model routing. This is decision "
+                "support only, not guaranteed alpha or financial advice."
+            ),
+        },
+        {"role": "user", "content": user_payload},
+    ]
+
+
+def _run_final_synthesis(
+    *,
+    llm_adapter: LLMToolAdapter,
+    messages: List[Dict[str, Any]],
+    draft_answer: str,
+    timeout: Optional[float],
+    max_tokens: int,
+) -> Any:
+    """Ask the strict reasoning model to produce the user-facing answer."""
+    return llm_adapter.call_text(
+        _build_final_synthesis_messages(messages, draft_answer),
+        max_tokens=max_tokens,
+        timeout=timeout,
+        purpose="reasoning",
+        allow_fallback=False,
+    )
+
+
 def _build_timeout_result(
     *,
     start_time: float,
@@ -367,6 +454,9 @@ def run_agent_loop(
     thinking_labels: Optional[Dict[str, str]] = None,
     max_wall_clock_seconds: Optional[float] = None,
     tool_call_timeout_seconds: Optional[float] = None,
+    tool_call_purpose: str = "reasoning",
+    final_synthesis_enabled: bool = False,
+    final_synthesis_max_tokens: int = 2048,
 ) -> RunLoopResult:
     """Execute the ReAct LLM ↔ tool loop.
 
@@ -384,6 +474,10 @@ def run_agent_loop(
         thinking_labels: Override map of tool_name → friendly label.
         max_wall_clock_seconds: Optional overall timeout budget for the loop.
         tool_call_timeout_seconds: Optional timeout for one parallel tool batch.
+        tool_call_purpose: LLM routing purpose for tool-capable loop steps.
+        final_synthesis_enabled: Whether to rewrite the final chat answer through
+            the strict reasoning model with no silent fallback.
+        final_synthesis_max_tokens: Maximum tokens for final synthesis.
 
     Returns:
         A :class:`RunLoopResult` with the final content, stats, and the
@@ -453,11 +547,11 @@ def run_agent_loop(
         # --- progress: thinking ---
         if progress_callback:
             if not tool_calls_log:
-                thinking_msg = "正在制定分析路径..."
+                thinking_msg = "Planning the analysis path..."
             else:
                 last_tool = tool_calls_log[-1].get("tool", "")
                 label = labels.get(last_tool, last_tool)
-                thinking_msg = f"「{label}」已完成，继续深入分析..."
+                thinking_msg = f"{label} finished; continuing the analysis..."
             progress_callback({"type": "thinking", "step": step + 1, "message": thinking_msg})
 
         # --- LLM call ---
@@ -465,6 +559,7 @@ def run_agent_loop(
             messages,
             tool_decls,
             timeout=remaining_timeout,
+            purpose=tool_call_purpose,
         )
         provider_used = response.provider
         total_tokens += (response.usage or {}).get("total_tokens", 0)
@@ -568,10 +663,43 @@ def run_agent_loop(
                 total_tokens,
             )
             if progress_callback:
-                progress_callback({"type": "generating", "step": step + 1, "message": "正在生成最终分析..."})
+                progress_callback({"type": "generating", "step": step + 1, "message": "Generating the final analysis..."})
 
             final_content = response.content or ""
             is_error = response.provider == "error"
+            if final_synthesis_enabled and not is_error and final_content:
+                remaining_timeout = _remaining_timeout_seconds(start_time, max_wall_clock_seconds)
+                final_response = _run_final_synthesis(
+                    llm_adapter=llm_adapter,
+                    messages=messages,
+                    draft_answer=final_content,
+                    timeout=remaining_timeout,
+                    max_tokens=final_synthesis_max_tokens,
+                )
+                final_model = getattr(final_response, "model", "") or final_response.provider
+                if final_model and final_model != "error":
+                    models_used.append(final_model)
+                final_usage = final_response.usage or {}
+                total_tokens += final_usage.get("total_tokens", 0)
+                if final_model and final_model != "error" and final_usage:
+                    _persist_usage(final_usage, final_model, call_type="agent")
+
+                if final_response.provider == "error" or not (final_response.content or "").strip():
+                    error_text = final_response.content or getattr(final_response, "error", None) or "Final reasoning model failed"
+                    return RunLoopResult(
+                        success=False,
+                        content="",
+                        tool_calls_log=tool_calls_log,
+                        total_steps=step + 1,
+                        total_tokens=total_tokens,
+                        provider=final_response.provider,
+                        models_used=models_used,
+                        error=error_text,
+                        messages=messages,
+                    )
+
+                final_content = final_response.content.strip()
+                provider_used = final_response.provider
 
             return RunLoopResult(
                 success=not is_error and bool(final_content),

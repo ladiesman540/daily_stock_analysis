@@ -24,6 +24,14 @@ from src.report_language import (
     is_supported_report_language_value,
     normalize_report_language,
 )
+from src.services.codex_auth_bridge import (
+    DEFAULT_CODEX_AUTH_PATH,
+    DEFAULT_CODEX_CLI_PATH,
+    get_codex_access_token,
+    get_codex_auth_status,
+    resolve_codex_auth_path,
+    resolve_codex_cli_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -347,6 +355,8 @@ def normalize_agent_litellm_model(
     configured_models: Optional[set[str]] = None,
 ) -> str:
     """Normalize AGENT_LITELLM_MODEL while preserving configured router aliases."""
+    if not isinstance(model, str):
+        return ""
     normalized_model = (model or "").strip()
     if not normalized_model:
         return ""
@@ -357,11 +367,23 @@ def normalize_agent_litellm_model(
     return normalized_model
 
 
+def _get_configured_router_model_set(config: "Config") -> set[str]:
+    """Return router/channel model aliases available for Agent model normalization."""
+    return set(get_configured_llm_models(getattr(config, "llm_model_list", []) or []))
+
+
 def get_effective_agent_primary_model(config: "Config") -> str:
-    """Return the effective Agent primary model with fallback inheritance."""
+    """Return the effective Agent reasoning model with fallback inheritance."""
     configured_router_models = set(
         get_configured_llm_models(getattr(config, "llm_model_list", []) or [])
     )
+    configured_reasoning_model = normalize_agent_litellm_model(
+        getattr(config, "agent_reasoning_model", ""),
+        configured_models=configured_router_models,
+    )
+    if configured_reasoning_model:
+        return configured_reasoning_model
+
     configured_agent_model = normalize_agent_litellm_model(
         getattr(config, "agent_litellm_model", ""),
         configured_models=configured_router_models,
@@ -371,14 +393,40 @@ def get_effective_agent_primary_model(config: "Config") -> str:
     return (getattr(config, "litellm_model", "") or "").strip()
 
 
+def get_effective_agent_data_model(config: "Config") -> str:
+    """Return the effective cheaper data-gathering/input model."""
+    configured_router_models = _get_configured_router_model_set(config)
+    configured_data_model = normalize_agent_litellm_model(
+        getattr(config, "agent_data_model", ""),
+        configured_models=configured_router_models,
+    )
+    if configured_data_model:
+        return configured_data_model
+    return (getattr(config, "litellm_model", "") or "").strip()
+
+
 def get_effective_agent_models_to_try(config: "Config") -> List[str]:
-    """Return Agent model try-order: primary + global fallbacks (deduped)."""
+    """Return Agent reasoning model try-order: reasoning + fallbacks + data (deduped)."""
     configured_router_models = set(
         get_configured_llm_models(getattr(config, "llm_model_list", []) or [])
     )
     raw_models = [get_effective_agent_primary_model(config)] + (
         getattr(config, "litellm_fallback_models", []) or []
+    ) + [get_effective_agent_data_model(config)]
+    return _dedupe_agent_models(raw_models, configured_router_models)
+
+
+def get_effective_agent_data_models_to_try(config: "Config") -> List[str]:
+    """Return data-gathering model try-order: data + global fallbacks (deduped)."""
+    configured_router_models = _get_configured_router_model_set(config)
+    raw_models = [get_effective_agent_data_model(config)] + (
+        getattr(config, "litellm_fallback_models", []) or []
     )
+    return _dedupe_agent_models(raw_models, configured_router_models)
+
+
+def _dedupe_agent_models(raw_models: List[str], configured_router_models: set[str]) -> List[str]:
+    """Normalize and dedupe Agent model lists while preserving first-use order."""
     seen = set()
     ordered_models: List[str] = []
     for model in raw_models:
@@ -489,6 +537,9 @@ class Config:
     openai_model: str = "gpt-4o-mini"  # OpenAI 兼容模型名称
     openai_vision_model: Optional[str] = None  # Deprecated: use VISION_MODEL instead
     openai_temperature: float = 0.7  # OpenAI 温度参数（0.0-2.0，默认0.7）
+    openai_codex_auth_enabled: bool = False  # Use local Codex/ChatGPT sign-in token for OpenAI API calls
+    openai_codex_auth_path: str = DEFAULT_CODEX_AUTH_PATH
+    openai_codex_cli_path: str = DEFAULT_CODEX_CLI_PATH
 
     # === Vision 配置 ===
     # VISION_MODEL: litellm model string used for image understanding calls.
@@ -504,6 +555,7 @@ class Config:
     tavily_api_keys: List[str] = field(default_factory=list)  # Tavily API Keys
     brave_api_keys: List[str] = field(default_factory=list)  # Brave Search API Keys
     serpapi_keys: List[str] = field(default_factory=list)  # SerpAPI Keys
+    alpha_vantage_api_key: Optional[str] = None  # Alpha Vantage market news/sentiment API Key
     searxng_base_urls: List[str] = field(default_factory=list)  # SearXNG instance URLs (self-hosted, no quota)
     searxng_public_instances_enabled: bool = True  # Auto-discover public SearXNG instances when base URLs are absent
 
@@ -516,8 +568,10 @@ class Config:
     news_strategy_profile: str = "short"  # 新闻窗口策略档位：ultra_short/short/medium/long
     bias_threshold: float = 5.0  # 乖离率阈值（%），超过此值提示不追高
 
-    # === Agent 模式配置 ===
-    agent_litellm_model: str = ""  # Optional Agent-only primary model; empty inherits LITELLM_MODEL
+    # === Agent mode config ===
+    agent_reasoning_model: str = ""  # Thoughtful analyst/final synthesis model; empty falls back to AGENT_LITELLM_MODEL/LITELLM_MODEL
+    agent_data_model: str = ""  # Cheaper model for planning, extraction, and input preparation; empty inherits LITELLM_MODEL
+    agent_litellm_model: str = ""  # Legacy Agent primary model; superseded by AGENT_REASONING_MODEL
     agent_mode: bool = False
     _agent_mode_explicit: bool = False  # True when AGENT_MODE was explicitly set in env
     agent_max_steps: int = 10
@@ -592,7 +646,7 @@ class Config:
 
     # 报告类型：simple(精简) 或 full(完整)
     report_type: str = "simple"
-    report_language: str = "zh"
+    report_language: str = "en"
 
     # 仅分析结果摘要：true 时只推送汇总，不含个股详情（Issue #262）
     report_summary_only: bool = False
@@ -931,19 +985,29 @@ class Config:
             if _single_deepseek:
                 deepseek_api_keys = [_single_deepseek]
 
+        openai_codex_auth_enabled = parse_env_bool(
+            os.getenv('OPENAI_CODEX_AUTH_ENABLED'),
+            default=False,
+        )
+        openai_codex_auth_path = resolve_codex_auth_path(os.getenv('OPENAI_CODEX_AUTH_PATH'))
+        openai_codex_cli_path = resolve_codex_cli_path(os.getenv('OPENAI_CODEX_CLI_PATH'))
+
         # LITELLM_MODEL: explicit config takes precedence; else infer from available keys
         litellm_model = os.getenv('LITELLM_MODEL', '').strip()
         if not litellm_model:
             _gemini_model_name = os.getenv('GEMINI_MODEL', 'gemini-3-flash-preview').strip()
             _anthropic_model_name = os.getenv('ANTHROPIC_MODEL', 'claude-3-5-sonnet-20241022').strip()
-            _openai_model_name = os.getenv('OPENAI_MODEL', 'gpt-4o-mini').strip()
+            _openai_model_name = os.getenv(
+                'OPENAI_MODEL',
+                'gpt-5.5' if openai_codex_auth_enabled else 'gpt-4o-mini',
+            ).strip()
             if gemini_api_keys:
                 litellm_model = f'gemini/{_gemini_model_name}'
             elif anthropic_api_keys:
                 litellm_model = f'anthropic/{_anthropic_model_name}'
             elif deepseek_api_keys:
                 litellm_model = 'deepseek/deepseek-chat'
-            elif openai_api_keys:
+            elif openai_api_keys or openai_codex_auth_enabled:
                 # For openai-compatible models, add prefix only if not already prefixed
                 if '/' not in _openai_model_name:
                     litellm_model = f'openai/{_openai_model_name}'
@@ -992,6 +1056,7 @@ class Config:
                     'https://aihubmix.com/v1' if os.getenv('AIHUBMIX_KEY') else None
                 ),
                 deepseek_api_keys,
+                openai_codex_auth_enabled=openai_codex_auth_enabled,
             )
             if llm_model_list:
                 llm_models_source = "legacy_env"
@@ -1014,9 +1079,18 @@ class Config:
                 if m not in _seen and not _seen.add(m)  # type: ignore[func-returns-value]
             ]
 
+        configured_agent_models = set(get_configured_llm_models(llm_model_list))
+        agent_reasoning_model = normalize_agent_litellm_model(
+            os.getenv('AGENT_REASONING_MODEL') or os.getenv('ANALYST_REASONING_MODEL', ''),
+            configured_models=configured_agent_models,
+        )
+        agent_data_model = normalize_agent_litellm_model(
+            os.getenv('AGENT_DATA_MODEL') or os.getenv('ANALYST_DATA_MODEL', ''),
+            configured_models=configured_agent_models,
+        )
         agent_litellm_model = normalize_agent_litellm_model(
             os.getenv('AGENT_LITELLM_MODEL', ''),
-            configured_models=set(get_configured_llm_models(llm_model_list)),
+            configured_models=configured_agent_models,
         )
 
         # 解析搜索引擎 API Keys（支持多个 key，逗号分隔）
@@ -1143,12 +1217,15 @@ class Config:
             # OPENAI_BASE_URL override is provided.
             # Model names match upstream (e.g. gemini-3.1-pro-preview, gpt-4o, gpt-4o-free, deepseek-chat).
             openai_api_key=os.getenv('AIHUBMIX_KEY') or os.getenv('OPENAI_API_KEY') or None,
-            openai_base_url=os.getenv('OPENAI_BASE_URL') or (
-                'https://aihubmix.com/v1' if os.getenv('AIHUBMIX_KEY') else None
-            ),  # noqa: E501
-            openai_model=os.getenv('OPENAI_MODEL', 'gpt-4o-mini'),
-            openai_vision_model=os.getenv('OPENAI_VISION_MODEL') or None,
-            openai_temperature=parse_env_float(os.getenv('OPENAI_TEMPERATURE'), 0.7, field_name='OPENAI_TEMPERATURE'),
+                openai_base_url=os.getenv('OPENAI_BASE_URL') or (
+                    'https://aihubmix.com/v1' if os.getenv('AIHUBMIX_KEY') else None
+                ),  # noqa: E501
+                openai_model=os.getenv('OPENAI_MODEL', 'gpt-4o-mini'),
+                openai_vision_model=os.getenv('OPENAI_VISION_MODEL') or None,
+                openai_temperature=parse_env_float(os.getenv('OPENAI_TEMPERATURE'), 0.7, field_name='OPENAI_TEMPERATURE'),
+                openai_codex_auth_enabled=openai_codex_auth_enabled,
+                openai_codex_auth_path=openai_codex_auth_path,
+                openai_codex_cli_path=openai_codex_cli_path,
             # Vision model: VISION_MODEL > OPENAI_VISION_MODEL (alias) > default
             vision_model=(
                 os.getenv('VISION_MODEL')
@@ -1162,6 +1239,7 @@ class Config:
             tavily_api_keys=tavily_api_keys,
             brave_api_keys=brave_api_keys,
             serpapi_keys=serpapi_keys,
+            alpha_vantage_api_key=os.getenv('ALPHA_VANTAGE_API_KEY') or os.getenv('ALPHAVANTAGE_API_KEY') or None,
             searxng_base_urls=searxng_base_urls,
             searxng_public_instances_enabled=searxng_public_instances_enabled,
             social_sentiment_api_key=os.getenv('SOCIAL_SENTIMENT_API_KEY') or None,
@@ -1171,6 +1249,8 @@ class Config:
                 os.getenv('NEWS_STRATEGY_PROFILE', 'short')
             ),
             bias_threshold=parse_env_float(os.getenv('BIAS_THRESHOLD'), 5.0, field_name='BIAS_THRESHOLD', minimum=1.0),
+            agent_reasoning_model=agent_reasoning_model,
+            agent_data_model=agent_data_model,
             agent_litellm_model=agent_litellm_model,
             agent_mode=os.getenv('AGENT_MODE', 'false').lower() == 'true',
             _agent_mode_explicit=os.getenv('AGENT_MODE') is not None,
@@ -1593,6 +1673,7 @@ class Config:
         openai_keys: List[str],
         openai_base_url: Optional[str],
         deepseek_keys: Optional[List[str]] = None,
+        openai_codex_auth_enabled: bool = False,
     ) -> List[Dict[str, Any]]:
         """Build Router model_list from legacy per-provider keys (backward compat).
 
@@ -1631,6 +1712,15 @@ class Config:
                     'model_name': '__legacy_openai__',
                     'litellm_params': params,
                 })
+
+        if openai_codex_auth_enabled and not openai_keys:
+            model_list.append({
+                'model_name': '__legacy_openai__',
+                'litellm_params': {
+                    'model': '__legacy_openai__',
+                    'api_key': '__codex_auth_bridge__',
+                },
+            })
 
         # DeepSeek keys (native litellm provider — auto-resolves api_base)
         for k in (deepseek_keys or []):
@@ -1801,16 +1891,16 @@ class Config:
         if file_value is not None:
             return file_value
 
-        return env_value or "zh"
+        return env_value or "en"
 
     @classmethod
     def _parse_report_language(cls, value: Optional[str]) -> str:
-        """Parse REPORT_LANGUAGE, fallback to zh for invalid values."""
-        normalized = normalize_report_language(value, default="zh")
+        """Parse REPORT_LANGUAGE, fallback to en for invalid values."""
+        normalized = normalize_report_language(value, default="en")
         raw = (value or "").strip()
         if raw and not is_supported_report_language_value(raw):
             logging.getLogger(__name__).warning(
-                "REPORT_LANGUAGE '%s' invalid, fallback to 'zh' (valid: zh/en)",
+                "REPORT_LANGUAGE '%s' invalid, fallback to 'en' (valid: zh/en)",
                 value,
             )
         return normalized
@@ -2043,8 +2133,8 @@ class Config:
             issues.append(ConfigIssue(
                 severity="error",
                 message=(
-                    "未配置任何可用的 AI 模型接入（高级模型路由配置 / 渠道 / API Key），"
-                    "AI 分析功能将不可用"
+                    "No usable AI model runtime is configured. Add an advanced router config, "
+                    "an enabled channel, or a matching provider API key."
                 ),
                 field="LITELLM_CONFIG",
             ))
@@ -2052,8 +2142,8 @@ class Config:
             issues.append(ConfigIssue(
                 severity="info",
                 message=(
-                    "尚未明确指定主模型，系统将自动从可用 API Key 推断。"
-                    "建议尽早配置主模型（格式如 gemini/gemini-2.5-flash）"
+                    "No explicit primary model is set. The app will infer one from available "
+                    "API keys; setting LITELLM_MODEL directly is recommended."
                 ),
                 field="LITELLM_MODEL",
             ))
@@ -2072,23 +2162,43 @@ class Config:
             if provider == "deepseek":
                 return any(k and len(k) >= 8 for k in (self.deepseek_api_keys or []))
             if provider == "openai":
-                return any(k and len(k) >= 8 for k in (self.openai_api_keys or []))
+                if any(k and len(k) >= 8 for k in (self.openai_api_keys or [])):
+                    return True
+                if self.openai_codex_auth_enabled:
+                    status = get_codex_auth_status(
+                        auth_path=self.openai_codex_auth_path,
+                        cli_path=self.openai_codex_cli_path,
+                    )
+                    return bool(status.get("auth_file_exists") and status.get("token_present"))
+                return False
             return False
 
-        configured_agent_primary_model = bool((self.agent_litellm_model or "").strip())
+        configured_agent_reasoning_field = (
+            "AGENT_REASONING_MODEL"
+            if (self.agent_reasoning_model or "").strip()
+            else "AGENT_LITELLM_MODEL"
+        )
+        configured_agent_primary_model = bool(
+            (self.agent_reasoning_model or "").strip()
+            or (self.agent_litellm_model or "").strip()
+        )
+        configured_agent_data_model = bool((self.agent_data_model or "").strip())
         effective_agent_primary_model = get_effective_agent_primary_model(self)
+        effective_agent_data_model = get_effective_agent_data_model(self)
 
         if available_router_model_set:
             if (
                 self.litellm_model
                 and not _uses_direct_env_provider(self.litellm_model)
+                and not _has_runtime_source_for_model(self.litellm_model)
                 and self.litellm_model not in available_router_model_set
             ):
                 issues.append(ConfigIssue(
                     severity="error",
                     message=(
-                        "已配置的主模型未出现在当前渠道或高级模型路由配置中。"
-                        f" 当前可用模型：{', '.join(available_router_models[:6])}"
+                        "The configured primary model is not declared by the current enabled "
+                        "channels or advanced model routing config. "
+                        f"Available models: {', '.join(available_router_models[:6])}"
                     ),
                     field="LITELLM_MODEL",
                 ))
@@ -2097,27 +2207,48 @@ class Config:
                 configured_agent_primary_model
                 and effective_agent_primary_model
                 and not _uses_direct_env_provider(effective_agent_primary_model)
+                and not _has_runtime_source_for_model(effective_agent_primary_model)
                 and effective_agent_primary_model not in available_router_model_set
             ):
                 issues.append(ConfigIssue(
                     severity="error",
                     message=(
-                        "已配置的 Agent 主模型未出现在当前渠道或高级模型路由配置中。"
-                        f" 当前可用模型：{', '.join(available_router_models[:6])}"
+                        "The configured Agent reasoning model is not declared by the current "
+                        "enabled channels or advanced model routing config. "
+                        f"Available models: {', '.join(available_router_models[:6])}"
                     ),
-                    field="AGENT_LITELLM_MODEL",
+                    field=configured_agent_reasoning_field,
+                ))
+
+            if (
+                configured_agent_data_model
+                and effective_agent_data_model
+                and not _uses_direct_env_provider(effective_agent_data_model)
+                and not _has_runtime_source_for_model(effective_agent_data_model)
+                and effective_agent_data_model not in available_router_model_set
+            ):
+                issues.append(ConfigIssue(
+                    severity="error",
+                    message=(
+                        "The configured Agent data-gathering model is not declared by "
+                        "the current enabled channels or advanced model routing config. "
+                        f"Available models: {', '.join(available_router_models[:6])}"
+                    ),
+                    field="AGENT_DATA_MODEL",
                 ))
 
             invalid_fallbacks = [
                 model for model in (self.litellm_fallback_models or [])
                 if model and model not in available_router_model_set
                 and not _uses_direct_env_provider(model)
+                and not _has_runtime_source_for_model(model)
             ]
             if invalid_fallbacks:
                 issues.append(ConfigIssue(
                     severity="warning",
                     message=(
-                        "备选模型中包含未在当前渠道或高级模型路由配置中声明的模型："
+                        "Some fallback models are not declared by the current enabled channels "
+                        "or advanced model routing config: "
                         f"{', '.join(invalid_fallbacks[:3])}"
                     ),
                     field="LITELLM_FALLBACK_MODELS",
@@ -2126,13 +2257,14 @@ class Config:
             if (
                 self.vision_model
                 and not _uses_direct_env_provider(self.vision_model)
+                and not _has_runtime_source_for_model(self.vision_model)
                 and self.vision_model not in available_router_model_set
             ):
                 issues.append(ConfigIssue(
                     severity="warning",
                     message=(
-                        "VISION_MODEL 未出现在当前渠道声明中。"
-                        f" 当前可用模型：{', '.join(available_router_models[:6])}"
+                        "VISION_MODEL is not declared by the current enabled channels. "
+                        f"Available models: {', '.join(available_router_models[:6])}"
                     ),
                     field="VISION_MODEL",
                 ))
@@ -2144,10 +2276,23 @@ class Config:
             issues.append(ConfigIssue(
                 severity="error",
                 message=(
-                    "已配置 Agent 主模型，但未找到可用的运行时来源"
-                    "（启用渠道或匹配的 API Key）。"
+                    "An Agent reasoning model is selected, but no usable runtime source was found. "
+                    "Enable a channel that declares the model or provide the matching provider API key."
                 ),
-                field="AGENT_LITELLM_MODEL",
+                field=configured_agent_reasoning_field,
+            ))
+        elif (
+            configured_agent_data_model
+            and effective_agent_data_model
+            and not _has_runtime_source_for_model(effective_agent_data_model)
+        ):
+            issues.append(ConfigIssue(
+                severity="error",
+                message=(
+                    "An Agent data-gathering model is selected, but no usable runtime source was found. "
+                    "Enable a channel that declares the model or provide the matching provider API key."
+                ),
+                field="AGENT_DATA_MODEL",
             ))
 
         # --- Search engine (informational only) ---
@@ -2313,7 +2458,16 @@ def get_api_keys_for_model(model: str, config: Config) -> List[str]:
     if provider == "deepseek":
         return [k for k in config.deepseek_api_keys if k and len(k) >= 8]
     if provider == "openai":
-        return [k for k in config.openai_api_keys if k and len(k) >= 8]
+        keys = [k for k in config.openai_api_keys if k and len(k) >= 8]
+        if keys:
+            return keys
+        if getattr(config, "openai_codex_auth_enabled", False):
+            token = get_codex_access_token(
+                auth_path=getattr(config, "openai_codex_auth_path", ""),
+                cli_path=getattr(config, "openai_codex_cli_path", ""),
+            )
+            return [token] if token else []
+        return []
     # Other LiteLLM-native providers – API key resolved from env vars
     return []
 

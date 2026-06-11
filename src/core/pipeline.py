@@ -36,6 +36,7 @@ from src.report_language import (
     normalize_report_language,
 )
 from src.search_service import SearchService
+from src.services.market_intel_service import get_market_intel_service
 from src.services.social_sentiment_service import SocialSentimentService
 from src.enums import ReportType
 from src.stock_analyzer import StockTrendAnalyzer, TrendAnalysisResult
@@ -376,7 +377,23 @@ class StockAnalysisPipeline:
             # Step 4: 多维度情报搜索（最新消息+风险排查+业绩预期）
             news_context = None
             self._emit_progress(46, f"{stock_name}：正在检索新闻与舆情")
-            if self.search_service is not None and self.search_service.is_available:
+            intel_results = None
+            intel_formatter = None
+
+            if is_us_stock_code(code):
+                try:
+                    market_intel_service = get_market_intel_service()
+                    intel_results = market_intel_service.search_comprehensive_intel(
+                        stock_code=code,
+                        stock_name=stock_name,
+                        max_searches=5,
+                    )
+                    intel_formatter = market_intel_service
+                    logger.info(f"{stock_name}({code}) typed US market intel completed")
+                except Exception as e:
+                    logger.warning(f"{stock_name}({code}) typed US market intel failed: {e}", exc_info=True)
+
+            if not intel_results and self.search_service is not None and self.search_service.is_available:
                 logger.info(f"{stock_name}({code}) 开始多维度情报搜索...")
 
                 # 使用多维度搜索（最多5次搜索）
@@ -385,31 +402,31 @@ class StockAnalysisPipeline:
                     stock_name=stock_name,
                     max_searches=5
                 )
+                intel_formatter = self.search_service
 
-                # 格式化情报报告
-                if intel_results:
-                    news_context = self.search_service.format_intel_report(intel_results, stock_name)
-                    total_results = sum(
-                        len(r.results) for r in intel_results.values() if r.success
-                    )
-                    logger.info(f"{stock_name}({code}) 情报搜索完成: 共 {total_results} 条结果")
-                    logger.debug(f"{stock_name}({code}) 情报搜索结果:\n{news_context}")
+            if intel_results and intel_formatter is not None:
+                news_context = intel_formatter.format_intel_report(intel_results, stock_name)
+                total_results = sum(
+                    len(r.results) for r in intel_results.values() if r.success
+                )
+                logger.info(f"{stock_name}({code}) 情报搜索完成: 共 {total_results} 条结果")
+                logger.debug(f"{stock_name}({code}) 情报搜索结果:\n{news_context}")
 
-                    # 保存新闻情报到数据库（用于后续复盘与查询）
-                    try:
-                        query_context = self._build_query_context(query_id=query_id)
-                        for dim_name, response in intel_results.items():
-                            if response and response.success and response.results:
-                                self.db.save_news_intel(
-                                    code=code,
-                                    name=stock_name,
-                                    dimension=dim_name,
-                                    query=response.query,
-                                    response=response,
-                                    query_context=query_context
-                                )
-                    except Exception as e:
-                        logger.warning(f"{stock_name}({code}) 保存新闻情报失败: {e}")
+                # 保存新闻情报到数据库（用于后续复盘与查询）
+                try:
+                    query_context = self._build_query_context(query_id=query_id)
+                    for dim_name, response in intel_results.items():
+                        if response and response.success and response.results:
+                            self.db.save_news_intel(
+                                code=code,
+                                name=stock_name,
+                                dimension=dim_name,
+                                query=response.query,
+                                response=response,
+                                query_context=query_context
+                            )
+                except Exception as e:
+                    logger.warning(f"{stock_name}({code}) 保存新闻情报失败: {e}")
             else:
                 logger.info(f"{stock_name}({code}) 搜索服务不可用，跳过情报搜索")
 
@@ -823,7 +840,30 @@ class StockAnalysisPipeline:
 
             # 保存新闻情报到数据库（Agent 工具结果仅用于 LLM 上下文，未持久化，Fixes #396）
             # 使用 search_stock_news（与 Agent 工具调用逻辑一致），仅 1 次 API 调用，无额外延迟
-            if self.search_service is not None and self.search_service.is_available:
+            if is_us_stock_code(code):
+                try:
+                    market_intel_service = get_market_intel_service()
+                    intel_results = market_intel_service.search_comprehensive_intel(
+                        stock_code=code,
+                        stock_name=resolved_stock_name,
+                        max_searches=5,
+                    )
+                    query_context = self._build_query_context(query_id=query_id)
+                    saved_total = 0
+                    for dim_name, response in intel_results.items():
+                        if response and response.success and response.results:
+                            saved_total += self.db.save_news_intel(
+                                code=code,
+                                name=resolved_stock_name,
+                                dimension=dim_name,
+                                query=response.query,
+                                response=response,
+                                query_context=query_context
+                            )
+                    logger.info(f"[{code}] Agent mode: typed US market intel saved/updated {saved_total} new rows")
+                except Exception as e:
+                    logger.warning(f"[{code}] Agent mode typed US market intel save failed: {e}", exc_info=True)
+            elif self.search_service is not None and self.search_service.is_available:
                 try:
                     news_response = self.search_service.search_stock_news(
                         stock_code=code,

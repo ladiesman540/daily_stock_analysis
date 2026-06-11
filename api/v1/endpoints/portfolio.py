@@ -20,6 +20,8 @@ from api.v1.schemas.portfolio import (
     PortfolioCorporateActionListResponse,
     PortfolioCorporateActionCreateRequest,
     PortfolioDeleteResponse,
+    PortfolioEquityHistoryResponse,
+    PortfolioEquityPoint,
     PortfolioEventCreatedResponse,
     PortfolioFxRefreshResponse,
     PortfolioImportBrokerListResponse,
@@ -31,6 +33,7 @@ from api.v1.schemas.portfolio import (
     PortfolioTradeListResponse,
     PortfolioTradeCreateRequest,
 )
+from src.repositories.portfolio_repo import PortfolioRepository
 from src.services.portfolio_import_service import PortfolioImportService
 from src.services.portfolio_risk_service import PortfolioRiskService
 from src.services.portfolio_service import (
@@ -453,6 +456,79 @@ def get_snapshot(
         raise _bad_request(exc)
     except Exception as exc:
         raise _internal_error("Get snapshot failed", exc)
+
+
+@router.get(
+    "/equity-history",
+    response_model=PortfolioEquityHistoryResponse,
+    responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
+    summary="Get daily equity curve from persisted snapshots",
+)
+def get_equity_history(
+    account_id: Optional[int] = Query(None, description="Optional account id, default returns all accounts"),
+    days: int = Query(90, ge=1, le=365, description="Lookback window in calendar days"),
+    cost_method: str = Query("fifo", description="Cost method: fifo or avg"),
+) -> PortfolioEquityHistoryResponse:
+    repo = PortfolioRepository()
+    try:
+        rows = repo.list_daily_snapshots_for_risk(
+            as_of=date.today(),
+            cost_method=cost_method,
+            account_id=account_id,
+            lookback_days=days,
+        )
+
+        # When account_id is None, aggregate by date and sum equity across accounts.
+        # If multiple currencies exist on same date, fall back to first account's series only.
+        if account_id is None and rows:
+            from collections import defaultdict
+            by_date = defaultdict(list)
+            for row in rows:
+                by_date[row.snapshot_date].append(row)
+
+            # Check for mixed currencies on same date.
+            has_mixed_currencies = False
+            for date_rows in by_date.values():
+                currencies = {row.base_currency for row in date_rows}
+                if len(currencies) > 1:
+                    has_mixed_currencies = True
+                    break
+
+            if has_mixed_currencies:
+                # Fall back to first account's series only.
+                if rows:
+                    first_account_id = rows[0].account_id
+                    rows = [row for row in rows if row.account_id == first_account_id]
+            else:
+                # Safe to sum equity across accounts for each date.
+                aggregated = {}
+                for snapshot_date, date_rows in sorted(by_date.items()):
+                    total_equity = sum(row.total_equity or 0.0 for row in date_rows)
+                    currency = date_rows[0].base_currency
+                    aggregated[snapshot_date] = (total_equity, currency)
+
+                rows = [
+                    type('obj', (object,), {
+                        'snapshot_date': d,
+                        'total_equity': eq,
+                        'base_currency': cur,
+                    })()
+                    for d, (eq, cur) in aggregated.items()
+                ]
+
+        points = [
+            PortfolioEquityPoint(
+                date=row.snapshot_date.isoformat(),
+                equity=float(row.total_equity or 0.0),
+                currency=str(row.base_currency or "CNY"),
+            )
+            for row in rows
+        ]
+        return PortfolioEquityHistoryResponse(days=days, points=points)
+    except ValueError as exc:
+        raise _bad_request(exc)
+    except Exception as exc:
+        raise _internal_error("Get equity history failed", exc)
 
 
 @router.post(

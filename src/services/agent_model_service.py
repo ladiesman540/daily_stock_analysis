@@ -5,7 +5,13 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from src.config import get_effective_agent_models_to_try, get_effective_agent_primary_model
+from src.config import (
+    get_configured_llm_models,
+    get_effective_agent_data_model,
+    get_effective_agent_models_to_try,
+    get_effective_agent_primary_model,
+    normalize_agent_litellm_model,
+)
 
 
 _PLACEHOLDER_TO_PROVIDER = {
@@ -32,10 +38,28 @@ def _get_model_provider(model_name: str) -> str:
     return "openai"
 
 
+def _get_configured_fallback_models(config) -> set[str]:
+    """Return only explicitly configured fallback models, excluding data role fallback."""
+    configured_router_models = set(
+        get_configured_llm_models(getattr(config, "llm_model_list", []) or [])
+    )
+    primary_model = get_effective_agent_primary_model(config)
+    fallback_models: set[str] = set()
+    for model in getattr(config, "litellm_fallback_models", []) or []:
+        normalized = normalize_agent_litellm_model(
+            model,
+            configured_models=configured_router_models,
+        )
+        if normalized and normalized != primary_model:
+            fallback_models.add(normalized)
+    return fallback_models
+
+
 def _build_non_legacy_deployments(config) -> List[Dict[str, Any]]:
     source = _get_models_source(config)
     primary_model = get_effective_agent_primary_model(config)
-    fallback_models = set(get_effective_agent_models_to_try(config)[1:])
+    data_model = get_effective_agent_data_model(config)
+    fallback_models = _get_configured_fallback_models(config)
     deployments: List[Dict[str, Any]] = []
 
     for index, entry in enumerate(getattr(config, "llm_model_list", []) or []):
@@ -46,6 +70,13 @@ def _build_non_legacy_deployments(config) -> List[Dict[str, Any]]:
 
         api_base = params.get("api_base")
         deployment_name = entry.get("model_name")
+        roles = []
+        if model_name == primary_model:
+            roles.append("reasoning")
+        if model_name == data_model:
+            roles.append("data")
+        if model_name in fallback_models:
+            roles.append("fallback")
         deployments.append(
             {
                 "deployment_id": f"{source}:{index}",
@@ -56,6 +87,7 @@ def _build_non_legacy_deployments(config) -> List[Dict[str, Any]]:
                 "deployment_name": str(deployment_name).strip() if deployment_name else None,
                 "is_primary": model_name == primary_model,
                 "is_fallback": model_name in fallback_models,
+                "role": ",".join(roles) or None,
             }
         )
 
@@ -64,6 +96,7 @@ def _build_non_legacy_deployments(config) -> List[Dict[str, Any]]:
 
 def _build_legacy_deployments(config) -> List[Dict[str, Any]]:
     primary_model = get_effective_agent_primary_model(config)
+    data_model = get_effective_agent_data_model(config)
     ordered_models = get_effective_agent_models_to_try(config)
     if not ordered_models:
         return []
@@ -76,13 +109,20 @@ def _build_legacy_deployments(config) -> List[Dict[str, Any]]:
 
     deployments: List[Dict[str, Any]] = []
     seen_models = set()
-    fallback_set = set(ordered_models[1:])
+    fallback_set = _get_configured_fallback_models(config)
     for model_name in ordered_models:
         if model_name in seen_models:
             continue
         seen_models.add(model_name)
 
         provider = _get_model_provider(model_name)
+        roles = []
+        if model_name == primary_model:
+            roles.append("reasoning")
+        if model_name == data_model:
+            roles.append("data")
+        if model_name in fallback_set:
+            roles.append("fallback")
         deployment_count = placeholder_counts.get(provider, 0)
         if deployment_count <= 0:
             # Legacy runtime still supports direct litellm calls for providers
@@ -112,6 +152,7 @@ def _build_legacy_deployments(config) -> List[Dict[str, Any]]:
                     "deployment_name": f"legacy_{provider}_{index + 1}",
                     "is_primary": model_name == primary_model,
                     "is_fallback": model_name in fallback_set,
+                    "role": ",".join(roles) or None,
                 }
             )
 

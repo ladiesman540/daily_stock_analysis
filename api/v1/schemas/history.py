@@ -81,13 +81,25 @@ class NewsIntelItem(BaseModel):
     title: str = Field(..., description="新闻标题")
     snippet: str = Field("", description="新闻摘要（最多200字）")
     url: str = Field(..., description="新闻链接")
+    source: Optional[str] = Field(None, description="新闻来源")
+    published_date: Optional[str] = Field(None, description="发布日期")
+    dimension: Optional[str] = Field(None, description="情报类型")
+    relevance_label: Optional[str] = Field(None, description="相关性标签")
+    relevance_reason: Optional[str] = Field(None, description="相关性说明")
+    freshness_label: Optional[str] = Field(None, description="时效说明")
 
     class Config:
         json_schema_extra = {
             "example": {
                 "title": "公司发布业绩快报，营收同比增长 20%",
                 "snippet": "公司公告显示，季度营收同比增长 20%...",
-                "url": "https://example.com/news/123"
+                "url": "https://example.com/news/123",
+                "source": "Company IR",
+                "published_date": "2026-05-06",
+                "dimension": "earnings",
+                "relevance_label": "Thesis catalyst",
+                "relevance_reason": "Earnings/guidance item that can affect the investment thesis.",
+                "freshness_label": "27 days old"
             }
         }
 

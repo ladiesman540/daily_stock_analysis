@@ -900,6 +900,14 @@ def main() -> int:
             def scheduled_task():
                 runtime_config = _reload_runtime_config()
                 run_full_analysis(runtime_config, args, scheduled_stock_codes)
+                if os.getenv("RESEARCH_BREADTH_CACHE_ENABLED", "true").strip().lower() not in {"0", "false", "no"}:
+                    try:
+                        from src.services.free_data_service import FreeDataService
+
+                        FreeDataService(cache_enabled=False).run_market_breadth_cache(universe="us_stocks")
+                        logger.info("Market breadth daily cache refreshed")
+                    except Exception as exc:
+                        logger.exception("Market breadth daily cache refresh failed: %s", exc)
 
             background_tasks = []
             if getattr(config, 'agent_event_monitor_enabled', False):

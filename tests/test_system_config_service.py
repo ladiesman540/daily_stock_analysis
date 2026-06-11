@@ -58,6 +58,17 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertFalse(items["GEMINI_API_KEY"]["is_masked"])
         self.assertTrue(items["GEMINI_API_KEY"]["raw_value_exists"])
 
+    def test_market_intel_fields_display_runtime_defaults_when_unset(self) -> None:
+        payload = self.service.get_config(include_schema=True)
+        items = {item["key"]: item for item in payload["items"]}
+
+        self.assertEqual(items["MARKET_INTEL_ALLOW_GENERIC_SEARCH"]["value"], "true")
+        self.assertFalse(items["MARKET_INTEL_ALLOW_GENERIC_SEARCH"]["raw_value_exists"])
+        self.assertEqual(items["MARKET_INTEL_ALLOW_PUBLIC_SEARXNG"]["value"], "false")
+        self.assertFalse(items["MARKET_INTEL_ALLOW_PUBLIC_SEARXNG"]["raw_value_exists"])
+        self.assertEqual(items["SEC_USER_AGENT"]["value"], "daily-stock-analysis/1.0 contact@example.com")
+        self.assertFalse(items["SEC_USER_AGENT"]["raw_value_exists"])
+
     def test_export_desktop_env_returns_raw_text(self) -> None:
         self.env_path.write_text(
             "# Desktop config\nSTOCK_LIST=600519,000001\n\nGEMINI_API_KEY=secret-key-value\n",

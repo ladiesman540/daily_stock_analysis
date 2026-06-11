@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Search tools — wraps SearchService methods as agent-callable tools.
+Search tools — wraps market intelligence methods as agent-callable tools.
 
 Tools:
 - search_stock_news: search latest stock news
@@ -8,33 +8,32 @@ Tools:
 """
 
 import logging
-from typing import Optional
 
 from src.agent.tools.registry import ToolParameter, ToolDefinition
 
 logger = logging.getLogger(__name__)
 
 
-def _get_search_service():
-    """Return shared SearchService singleton."""
-    from src.search_service import get_search_service
-    return get_search_service()
+def _get_market_intel_service():
+    """Return shared MarketIntelService singleton."""
+    from src.services.market_intel_service import get_market_intel_service
+    return get_market_intel_service()
 
 
 def _handle_search_stock_news(stock_code: str, stock_name: str) -> dict:
-    """Search latest news for a stock."""
-    service = _get_search_service()
+    """Search latest news and official evidence for a stock."""
+    service = _get_market_intel_service()
 
-    if not service.is_available:
-        return {"error": "No search engine available (no API keys configured)"}
-
-    response = service.search_stock_news(stock_code, stock_name, max_results=5)
+    packet = service.get_stock_intel(stock_code, stock_name, max_results=5)
+    response = service.search_stock_news_response(stock_code, stock_name, max_results=5)
+    data_quality = packet.data_quality()
 
     if not response.success:
         return {
             "query": response.query,
             "success": False,
             "error": response.error_message,
+            "data_quality": data_quality,
         }
 
     return {
@@ -42,6 +41,7 @@ def _handle_search_stock_news(stock_code: str, stock_name: str) -> dict:
         "provider": response.provider,
         "success": True,
         "results_count": len(response.results),
+        "data_quality": data_quality,
         "results": [
             {
                 "title": r.title,
@@ -57,19 +57,19 @@ def _handle_search_stock_news(stock_code: str, stock_name: str) -> dict:
 
 search_stock_news_tool = ToolDefinition(
     name="search_stock_news",
-    description="Search for the latest news articles about a specific stock. "
-                "Requires both stock_code and stock_name for accurate search. "
-                "Returns news titles, snippets, sources, and URLs.",
+    description="Search latest market intelligence for a specific stock. "
+                "Uses official filings and typed finance news before generic web search. "
+                "Returns titles, snippets, sources, URLs, and data-quality diagnostics.",
     parameters=[
         ToolParameter(
             name="stock_code",
             type="string",
-            description="Stock code, e.g., '600519'",
+            description="Stock ticker or code, e.g., 'NVDA' or '600519'",
         ),
         ToolParameter(
             name="stock_name",
             type="string",
-            description="Stock name in Chinese, e.g., '贵州茅台'",
+            description="Company or instrument name, e.g., 'NVIDIA'",
         ),
     ],
     handler=_handle_search_stock_news,
@@ -83,16 +83,10 @@ search_stock_news_tool = ToolDefinition(
 
 def _handle_search_comprehensive_intel(stock_code: str, stock_name: str) -> dict:
     """Multi-dimensional intelligence search."""
-    service = _get_search_service()
+    service = _get_market_intel_service()
 
-    if not service.is_available:
-        return {"error": "No search engine available (no API keys configured)"}
-
-    intel_results = service.search_comprehensive_intel(
-        stock_code=stock_code,
-        stock_name=stock_name,
-        max_searches=6,
-    )
+    packet = service.get_stock_intel(stock_code, stock_name, max_results=6)
+    intel_results = packet.dimensions
 
     if not intel_results:
         return {"error": "Comprehensive intel search returned no results"}
@@ -106,12 +100,15 @@ def _handle_search_comprehensive_intel(stock_code: str, stock_name: str) -> dict
         if response and response.success:
             dimensions[dim_name] = {
                 "query": response.query,
+                "provider": response.provider,
                 "results_count": len(response.results),
                 "results": [
                     {
                         "title": r.title,
                         "snippet": r.snippet,
                         "source": r.source,
+                        "url": r.url,
+                        "published_date": r.published_date,
                     }
                     for r in response.results[:3]  # limit to 3 per dimension to save tokens
                 ],
@@ -120,6 +117,7 @@ def _handle_search_comprehensive_intel(stock_code: str, stock_name: str) -> dict
     return {
         "report": report,
         "dimensions": dimensions,
+        "data_quality": packet.data_quality(),
     }
 
 
@@ -132,12 +130,12 @@ search_comprehensive_intel_tool = ToolDefinition(
         ToolParameter(
             name="stock_code",
             type="string",
-            description="Stock code, e.g., '600519'",
+            description="Stock ticker or code, e.g., 'NVDA' or '600519'",
         ),
         ToolParameter(
             name="stock_name",
             type="string",
-            description="Stock name in Chinese, e.g., '贵州茅台'",
+            description="Company or instrument name, e.g., 'NVIDIA'",
         ),
     ],
     handler=_handle_search_comprehensive_intel,

@@ -147,6 +147,9 @@ class NotificationService(
         self._report_summary_only = getattr(config, 'report_summary_only', False)
         self._history_compare_cache: Dict[Tuple[int, Tuple[Tuple[str, str], ...]], Dict[str, List[Dict[str, Any]]]] = {}
 
+        # 最近一次 send() 的逐渠道结果（渠道名 -> "ok" 或错误信息），供调用方诊断
+        self.last_send_results: Dict[str, str] = {}
+
         # 初始化各渠道
         AstrbotSender.__init__(self, config)
         CustomWebhookSender.__init__(self, config)
@@ -1624,6 +1627,7 @@ class NotificationService(
 
         success_count = 0
         fail_count = 0
+        self.last_send_results = {}
 
         for channel in self._available_channels:
             channel_name = ChannelDetector.get_channel_name(channel)
@@ -1683,12 +1687,15 @@ class NotificationService(
 
                 if result:
                     success_count += 1
+                    self.last_send_results[channel_name] = "ok"
                 else:
                     fail_count += 1
+                    self.last_send_results[channel_name] = "send returned False"
 
             except Exception as e:
                 logger.error(f"{channel_name} 发送失败: {e}")
                 fail_count += 1
+                self.last_send_results[channel_name] = str(e)
 
         logger.info(f"通知发送完成：成功 {success_count} 个，失败 {fail_count} 个")
         return success_count > 0 or context_success

@@ -28,6 +28,7 @@ class StockQuote(BaseModel):
     prev_close: Optional[float] = Field(None, description="昨收价")
     volume: Optional[float] = Field(None, description="成交量（股）")
     amount: Optional[float] = Field(None, description="成交额（元）")
+    source: Optional[str] = Field(None, description="数据来源")
     update_time: Optional[str] = Field(None, description="更新时间")
     
     class Config:
@@ -44,6 +45,7 @@ class StockQuote(BaseModel):
                 "prev_close": 1785.00,
                 "volume": 10000000,
                 "amount": 18000000000,
+                "source": "yfinance",
                 "update_time": "2024-01-01T15:00:00"
             }
         }

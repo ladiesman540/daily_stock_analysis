@@ -127,7 +127,7 @@ def create_app(static_dir: Optional[Path] = None) -> FastAPI:
             return FileResponse(static_dir / "index.html")
     else:
         _FRONTEND_NOT_BUILT_HTML = """<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>DSA - Frontend Not Built</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}

@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from src.config import (
     Config,
+    get_effective_agent_data_model,
     get_effective_agent_models_to_try,
     get_effective_agent_primary_model,
 )
@@ -246,6 +247,42 @@ class LLMChannelConfigTestCase(unittest.TestCase):
 
     @patch("src.config.setup_env")
     @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_agent_reasoning_model_takes_priority_over_legacy_agent_model(self, _mock_parse_yaml, _mock_setup_env) -> None:
+        env = {
+            "OPENAI_API_KEY": "sk-test-value",
+            "LITELLM_MODEL": "gemini/gemini-3-flash-preview",
+            "AGENT_REASONING_MODEL": "gpt-5.5",
+            "AGENT_LITELLM_MODEL": "gpt-4o-mini",
+        }
+
+        with patch.dict(os.environ, env, clear=True):
+            config = Config._load_from_env()
+
+        self.assertEqual(config.agent_reasoning_model, "openai/gpt-5.5")
+        self.assertEqual(get_effective_agent_primary_model(config), "openai/gpt-5.5")
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
+    def test_agent_data_model_is_separate_from_reasoning_model(self, _mock_parse_yaml, _mock_setup_env) -> None:
+        env = {
+            "OPENAI_API_KEY": "sk-test-value",
+            "LITELLM_MODEL": "gemini/gemini-3-flash-preview",
+            "AGENT_REASONING_MODEL": "openai/gpt-5.5",
+            "AGENT_DATA_MODEL": "gemini/gemini-3-flash-preview",
+        }
+
+        with patch.dict(os.environ, env, clear=True):
+            config = Config._load_from_env()
+
+        self.assertEqual(get_effective_agent_primary_model(config), "openai/gpt-5.5")
+        self.assertEqual(get_effective_agent_data_model(config), "gemini/gemini-3-flash-preview")
+        self.assertEqual(
+            get_effective_agent_models_to_try(config),
+            ["openai/gpt-5.5", "gemini/gemini-2.5-flash", "gemini/gemini-3-flash-preview"],
+        )
+
+    @patch("src.config.setup_env")
+    @patch.object(Config, "_parse_litellm_yaml", return_value=[])
     def test_agent_models_to_try_are_deduped_in_order(self, _mock_parse_yaml, _mock_setup_env) -> None:
         env = {
             "OPENAI_API_KEY": "sk-test-value",
@@ -277,7 +314,7 @@ class LLMChannelConfigTestCase(unittest.TestCase):
 
         self.assertEqual(
             get_effective_agent_models_to_try(config),
-            ["openai/gpt-4o-mini"],
+            ["openai/gpt-4o-mini", "gemini/gemini-2.5-flash"],
         )
 
     @patch("src.config.setup_env")

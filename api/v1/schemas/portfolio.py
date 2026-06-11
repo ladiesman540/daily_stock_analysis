@@ -198,6 +198,17 @@ class PortfolioSnapshotResponse(BaseModel):
     accounts: List[PortfolioAccountSnapshot] = Field(default_factory=list)
 
 
+class PortfolioEquityPoint(BaseModel):
+    date: str
+    equity: float
+    currency: str
+
+
+class PortfolioEquityHistoryResponse(BaseModel):
+    days: int
+    points: List[PortfolioEquityPoint] = Field(default_factory=list)
+
+
 class PortfolioImportTradeItem(BaseModel):
     trade_date: str
     symbol: str

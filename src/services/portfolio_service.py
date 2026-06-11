@@ -449,7 +449,13 @@ class PortfolioService:
             account_rows = self.repo.list_accounts(include_inactive=False)
 
         accounts_payload: List[Dict[str, Any]] = []
-        aggregate_currency = "CNY"
+        # Aggregate in the accounts' shared base currency when uniform (avoids
+        # mislabeling single-currency portfolios via stale FX); CNY only as the
+        # mixed-currency fallback.
+        base_currencies = {
+            self._normalize_currency(account.base_currency) for account in account_rows
+        }
+        aggregate_currency = base_currencies.pop() if len(base_currencies) == 1 else "CNY"
         aggregate = {
             "total_cash": 0.0,
             "total_market_value": 0.0,

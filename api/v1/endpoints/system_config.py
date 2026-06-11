@@ -15,6 +15,7 @@ from api.v1.schemas.system_config import (
     DiscoverLLMChannelModelsResponse,
     ExportSystemConfigResponse,
     ImportSystemConfigRequest,
+    OpenAICodexAuthStatusResponse,
     SystemConfigConflictResponse,
     SystemConfigResponse,
     SystemConfigSchemaResponse,
@@ -23,6 +24,7 @@ from api.v1.schemas.system_config import (
     TestLLMChannelResponse,
     UpdateSystemConfigRequest,
     UpdateSystemConfigResponse,
+    UseOpenAICodexAuthRequest,
     ValidateSystemConfigRequest,
     ValidateSystemConfigResponse,
 )
@@ -130,6 +132,86 @@ def update_system_config(
             detail={
                 "error": "internal_error",
                 "message": "Failed to update system configuration",
+            },
+        )
+
+
+@router.get(
+    "/config/openai-codex/status",
+    response_model=OpenAICodexAuthStatusResponse,
+    responses={500: {"description": "Internal server error", "model": ErrorResponse}},
+    summary="Get local Codex / ChatGPT auth status",
+    description="Return safe local Codex auth metadata without exposing tokens.",
+)
+def get_openai_codex_status(
+    service: SystemConfigService = Depends(get_system_config_service),
+) -> OpenAICodexAuthStatusResponse:
+    """Check whether local Codex ChatGPT sign-in is available."""
+    try:
+        payload = service.get_openai_codex_status()
+        return OpenAICodexAuthStatusResponse.model_validate(payload)
+    except Exception as exc:
+        logger.error("Failed to inspect Codex auth status: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "internal_error",
+                "message": "Failed to inspect Codex auth status",
+            },
+        )
+
+
+@router.post(
+    "/config/openai-codex/use",
+    response_model=UpdateSystemConfigResponse,
+    responses={
+        200: {"description": "Codex auth bridge enabled"},
+        400: {"description": "Validation failed", "model": SystemConfigValidationErrorResponse},
+        409: {"description": "Version conflict", "model": SystemConfigConflictResponse},
+        500: {"description": "Internal server error", "model": ErrorResponse},
+    },
+    summary="Use local Codex / ChatGPT auth for OpenAI model calls",
+    description="Enable the backend-only Codex auth bridge and set the thoughtful analyst model.",
+)
+def use_openai_codex_auth(
+    request: UseOpenAICodexAuthRequest,
+    service: SystemConfigService = Depends(get_system_config_service),
+) -> UpdateSystemConfigResponse:
+    """Enable local Codex auth for OpenAI calls after explicit user action."""
+    try:
+        payload = service.use_openai_codex_auth(
+            config_version=request.config_version,
+            mask_token=request.mask_token,
+            reasoning_model=request.reasoning_model,
+            data_model=request.data_model,
+            reload_now=request.reload_now,
+        )
+        return UpdateSystemConfigResponse.model_validate(payload)
+    except ConfigValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "validation_failed",
+                "message": "Codex auth bridge validation failed",
+                "issues": exc.issues,
+            },
+        )
+    except ConfigConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "config_version_conflict",
+                "message": "Configuration has changed, please reload and retry",
+                "current_config_version": exc.current_version,
+            },
+        )
+    except Exception as exc:
+        logger.error("Failed to enable Codex auth bridge: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "internal_error",
+                "message": "Failed to enable Codex auth bridge",
             },
         )
 

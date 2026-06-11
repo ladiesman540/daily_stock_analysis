@@ -63,6 +63,9 @@ class StockService:
             # - pre_close -> prev_close
             # - volume -> volume
             # - amount -> amount
+            source = getattr(quote, "source", None)
+            source_value = getattr(source, "value", None) or (str(source) if source is not None else None)
+
             return {
                 "stock_code": getattr(quote, "code", stock_code),
                 "stock_name": getattr(quote, "name", None),
@@ -75,6 +78,7 @@ class StockService:
                 "prev_close": getattr(quote, "pre_close", None),
                 "volume": getattr(quote, "volume", None),
                 "amount": getattr(quote, "amount", None),
+                "source": source_value,
                 "update_time": datetime.now().isoformat(),
             }
             
@@ -182,5 +186,6 @@ class StockService:
             "prev_close": None,
             "volume": None,
             "amount": None,
+            "source": "placeholder",
             "update_time": datetime.now().isoformat(),
         }

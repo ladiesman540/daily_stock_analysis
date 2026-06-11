@@ -397,6 +397,49 @@ class MarketAnalyzer:
             lines.append(f"> 💧 领跌: {bot}")
         return "\n".join(lines)
 
+    def _build_quant_regime_block(self) -> str:
+        """Deterministic regime block for the US prompt so the LLM narrates computed
+        numbers instead of inventing a regime."""
+        if self.region != "us":
+            return ""
+        try:
+            from src.storage import DatabaseManager
+
+            snapshot = DatabaseManager.get_instance().get_latest_market_regime_snapshot()
+        except Exception as exc:
+            logger.debug(f"读取量化市场状态快照失败: {exc}")
+            return ""
+        if not snapshot or not snapshot.get("as_of"):
+            return ""
+        try:
+            age_days = (datetime.now().date() - datetime.fromisoformat(str(snapshot["as_of"])[:10]).date()).days
+        except ValueError:
+            age_days = None
+        if age_days is None or age_days > 5:
+            return ""
+        lines = [
+            f"## Computed Market Regime (deterministic, as of {snapshot.get('as_of')})",
+            f"- Regime: {snapshot.get('regime')} (score {snapshot.get('score')}/100, confidence {snapshot.get('confidence') or 'n/a'})",
+        ]
+        if snapshot.get("vix") is not None:
+            term = (
+                "inverted (VIX above VIX3M) — front-loaded stress"
+                if snapshot.get("term_inverted")
+                else "normal"
+            )
+            vix_line = f"- VIX: {snapshot['vix']}"
+            if snapshot.get("vix3m") is not None:
+                vix_line += f" / VIX3M {snapshot['vix3m']}"
+            lines.append(f"{vix_line}, term structure {term}")
+        if snapshot.get("breadth_above_50dma_pct") is not None:
+            lines.append(
+                f"- Breadth: {snapshot['breadth_above_50dma_pct']}% of tracked liquid ETFs are above their 50-day moving average"
+            )
+        lines.append(
+            "Narrate this computed regime in the recap. Do NOT invent a different regime label or contradict these numbers."
+        )
+        return "\n".join(lines)
+
     def _build_review_prompt(self, overview: MarketOverview, news: List) -> str:
         """构建复盘报告 Prompt"""
         # 指数行情信息（简洁格式，不用emoji）
@@ -455,6 +498,8 @@ Lagging: {bottom_sectors_text if bottom_sectors_text else "N/A"}"""
             else:
                 sector_block = "## 板块表现\n（美股暂无板块涨跌数据）"
 
+        regime_block = self._build_quant_regime_block()
+
         data_no_indices_hint = (
             "注意：由于行情数据获取失败，请主要根据【市场新闻】进行定性分析和总结，不要编造具体的指数点位。"
             if not indices_text
@@ -491,6 +536,8 @@ Lagging: {bottom_sectors_text if bottom_sectors_text else "N/A"}"""
 {stats_block}
 
 {sector_block}
+
+{regime_block}
 
 ## Market News
 {news_placeholder}

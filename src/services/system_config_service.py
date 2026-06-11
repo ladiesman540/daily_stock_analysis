@@ -36,6 +36,13 @@ from src.core.config_registry import (
     get_field_definition,
     get_registered_field_keys,
 )
+from src.services.codex_auth_bridge import (
+    DEFAULT_CODEX_AUTH_PATH,
+    DEFAULT_CODEX_CLI_PATH,
+    get_codex_auth_status,
+    resolve_codex_auth_path,
+    resolve_codex_cli_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +84,13 @@ class SystemConfigService:
             "strategy": "specialist",
             "skill": "specialist",
         }
+    }
+    _DISPLAY_SCHEMA_DEFAULT_KEYS: Set[str] = {
+        "MARKET_INTEL_ALLOW_GENERIC_SEARCH",
+        "MARKET_INTEL_ALLOW_PUBLIC_SEARXNG",
+        "POSITIONING_OPTIONS_PROVIDER_PRIORITY",
+        "POSITIONING_USE_YFINANCE_OPTIONS",
+        "SEC_USER_AGENT",
     }
 
     def __init__(self, manager: Optional[ConfigManager] = None):
@@ -169,12 +183,15 @@ class SystemConfigService:
 
         items: List[Dict[str, Any]] = []
         for key in all_keys:
-            raw_value = config_map.get(key, "")
             field_schema = schema_by_key[key]
+            raw_value = config_map.get(key, "")
+            raw_value_exists = bool(raw_value)
+            if not raw_value_exists and key.upper() in self._DISPLAY_SCHEMA_DEFAULT_KEYS:
+                raw_value = str(field_schema.get("default_value") or "")
             item: Dict[str, Any] = {
                 "key": key,
                 "value": raw_value,
-                "raw_value_exists": bool(raw_value),
+                "raw_value_exists": raw_value_exists,
                 "is_masked": False,
             }
             if include_schema:
@@ -560,6 +577,79 @@ class SystemConfigService:
             "updated_keys": updated_keys,
             "warnings": warnings,
         }
+
+    def get_openai_codex_status(self) -> Dict[str, Any]:
+        """Return safe metadata for the local Codex/ChatGPT sign-in bridge."""
+        effective_map = self._build_display_config_map(self._manager.read_config_map())
+        auth_path = resolve_codex_auth_path(effective_map.get("OPENAI_CODEX_AUTH_PATH"))
+        cli_path = resolve_codex_cli_path(effective_map.get("OPENAI_CODEX_CLI_PATH"))
+        status = get_codex_auth_status(
+            auth_path=auth_path,
+            cli_path=cli_path,
+            run_cli_status=True,
+        )
+        return {
+            "enabled": parse_env_bool(effective_map.get("OPENAI_CODEX_AUTH_ENABLED"), default=False),
+            "recommended_model": "openai/gpt-5.5",
+            **status,
+        }
+
+    def use_openai_codex_auth(
+        self,
+        *,
+        config_version: str,
+        mask_token: str = "******",
+        reasoning_model: str = "openai/gpt-5.5",
+        data_model: str = "",
+        reload_now: bool = True,
+    ) -> Dict[str, Any]:
+        """Enable the local Codex/ChatGPT sign-in bridge for OpenAI model calls."""
+        status = self.get_openai_codex_status()
+        if not bool(status.get("logged_in")):
+            raise ConfigValidationError(
+                issues=[
+                    {
+                        "key": "OPENAI_CODEX_AUTH_ENABLED",
+                        "code": "codex_not_logged_in",
+                        "message": (
+                            "Codex is not logged in with ChatGPT on this machine. "
+                            "Run `codex login` first, then try again."
+                        ),
+                        "severity": "error",
+                        "expected": "Codex login status: Logged in using ChatGPT",
+                        "actual": str(status.get("status_message") or "not logged in"),
+                    }
+                ]
+            )
+
+        effective_map = self._build_display_config_map(self._manager.read_config_map())
+        selected_reasoning_model = normalize_agent_litellm_model(reasoning_model or "openai/gpt-5.5")
+        selected_data_model = (data_model or "").strip()
+        if not selected_data_model:
+            selected_data_model = (
+                effective_map.get("AGENT_DATA_MODEL")
+                or effective_map.get("LITELLM_MODEL")
+                or "gemini/gemini-3-flash-preview"
+            ).strip()
+
+        updates: List[Dict[str, str]] = [
+            {"key": "OPENAI_CODEX_AUTH_ENABLED", "value": "true"},
+            {"key": "OPENAI_CODEX_AUTH_PATH", "value": str(status.get("auth_path") or DEFAULT_CODEX_AUTH_PATH)},
+            {"key": "OPENAI_CODEX_CLI_PATH", "value": str(status.get("cli_path") or DEFAULT_CODEX_CLI_PATH)},
+            {"key": "AGENT_REASONING_MODEL", "value": selected_reasoning_model},
+            {"key": "AGENT_LITELLM_MODEL", "value": selected_reasoning_model},
+        ]
+        if selected_data_model:
+            updates.append({"key": "AGENT_DATA_MODEL", "value": selected_data_model})
+
+        result = self.update(
+            config_version=config_version,
+            items=updates,
+            mask_token=mask_token,
+            reload_now=reload_now,
+        )
+        result["codex_status"] = self.get_openai_codex_status()
+        return result
 
     def _build_explainability_warnings(
         self,
@@ -1246,6 +1336,13 @@ class SystemConfigService:
                 (effective_map.get("OPENAI_API_KEYS") or "").strip()
                 or (effective_map.get("AIHUBMIX_KEY") or "").strip()
                 or (effective_map.get("OPENAI_API_KEY") or "").strip()
+                or (
+                    parse_env_bool(effective_map.get("OPENAI_CODEX_AUTH_ENABLED"), default=False)
+                    and get_codex_auth_status(
+                        auth_path=effective_map.get("OPENAI_CODEX_AUTH_PATH") or DEFAULT_CODEX_AUTH_PATH,
+                        cli_path=effective_map.get("OPENAI_CODEX_CLI_PATH") or DEFAULT_CODEX_CLI_PATH,
+                    ).get("auth_file_exists")
+                )
             )
         return False
 
@@ -1272,9 +1369,22 @@ class SystemConfigService:
             if not raw_channels:
                 return issues
 
-            configured_agent_model_raw = (effective_map.get("AGENT_LITELLM_MODEL") or "").strip()
+            configured_agent_model_field = (
+                "AGENT_REASONING_MODEL"
+                if (effective_map.get("AGENT_REASONING_MODEL") or "").strip()
+                else "AGENT_LITELLM_MODEL"
+            )
+            configured_agent_model_raw = (
+                (effective_map.get("AGENT_REASONING_MODEL") or "").strip()
+                or (effective_map.get("AGENT_LITELLM_MODEL") or "").strip()
+            )
             configured_agent_model = normalize_agent_litellm_model(
                 configured_agent_model_raw,
+                configured_models=available_model_set,
+            )
+            configured_data_model_raw = (effective_map.get("AGENT_DATA_MODEL") or "").strip()
+            configured_data_model = normalize_agent_litellm_model(
+                configured_data_model_raw,
                 configured_models=available_model_set,
             )
             primary_model = (effective_map.get("LITELLM_MODEL") or "").strip()
@@ -1304,16 +1414,39 @@ class SystemConfigService:
             ):
                 issues.append(
                     {
-                        "key": "AGENT_LITELLM_MODEL",
+                        "key": configured_agent_model_field,
                         "code": "missing_runtime_source",
                         "message": (
-                            "An Agent primary model is selected, but no usable runtime source was found. "
+                            "An Agent reasoning model is selected, but no usable runtime source was found. "
                             "Enable at least one channel with available models, or provide the "
                             "matching provider API key so the model can be resolved."
                         ),
                         "severity": "error",
                         "expected": "enabled channel model or matching legacy API key",
                         "actual": configured_agent_model,
+                    }
+                )
+
+            if (
+                configured_data_model_raw
+                and configured_data_model
+                and not SystemConfigService._has_runtime_source_for_model(
+                    configured_data_model,
+                    effective_map,
+                )
+            ):
+                issues.append(
+                    {
+                        "key": "AGENT_DATA_MODEL",
+                        "code": "missing_runtime_source",
+                        "message": (
+                            "An Agent data-gathering model is selected, but no usable runtime source was found. "
+                            "Enable at least one channel with available models, or provide the "
+                            "matching provider API key so the model can be resolved."
+                        ),
+                        "severity": "error",
+                        "expected": "enabled channel model or matching legacy API key",
+                        "actual": configured_data_model,
                     }
                 )
 
@@ -1360,7 +1493,12 @@ class SystemConfigService:
             return issues
 
         primary_model = (effective_map.get("LITELLM_MODEL") or "").strip()
-        if primary_model and primary_model not in available_model_set and not _uses_direct_env_provider(primary_model):
+        if (
+            primary_model
+            and primary_model not in available_model_set
+            and not _uses_direct_env_provider(primary_model)
+            and not SystemConfigService._has_runtime_source_for_model(primary_model, effective_map)
+        ):
             issues.append(
                 {
                     "key": "LITELLM_MODEL",
@@ -1376,7 +1514,15 @@ class SystemConfigService:
                 }
             )
 
-        configured_agent_model_raw = (effective_map.get("AGENT_LITELLM_MODEL") or "").strip()
+        configured_agent_model_field = (
+            "AGENT_REASONING_MODEL"
+            if (effective_map.get("AGENT_REASONING_MODEL") or "").strip()
+            else "AGENT_LITELLM_MODEL"
+        )
+        configured_agent_model_raw = (
+            (effective_map.get("AGENT_REASONING_MODEL") or "").strip()
+            or (effective_map.get("AGENT_LITELLM_MODEL") or "").strip()
+        )
         configured_agent_model = normalize_agent_litellm_model(
             configured_agent_model_raw,
             configured_models=available_model_set,
@@ -1386,19 +1532,47 @@ class SystemConfigService:
             and configured_agent_model
             and configured_agent_model not in available_model_set
             and not _uses_direct_env_provider(configured_agent_model)
+            and not SystemConfigService._has_runtime_source_for_model(configured_agent_model, effective_map)
         ):
             issues.append(
                 {
-                    "key": "AGENT_LITELLM_MODEL",
+                    "key": configured_agent_model_field,
                     "code": "unknown_model",
                     "message": (
-                        "The selected Agent primary model is not declared by the current enabled channels "
+                        "The selected Agent reasoning model is not declared by the current enabled channels "
                         "or advanced model routing config. "
                         f"Available models: {', '.join(available_models[:6])}"
                     ),
                     "severity": "error",
                     "expected": "one configured channel model",
                     "actual": configured_agent_model,
+                }
+            )
+
+        configured_data_model_raw = (effective_map.get("AGENT_DATA_MODEL") or "").strip()
+        configured_data_model = normalize_agent_litellm_model(
+            configured_data_model_raw,
+            configured_models=available_model_set,
+        )
+        if (
+            configured_data_model_raw
+            and configured_data_model
+            and configured_data_model not in available_model_set
+            and not _uses_direct_env_provider(configured_data_model)
+            and not SystemConfigService._has_runtime_source_for_model(configured_data_model, effective_map)
+        ):
+            issues.append(
+                {
+                    "key": "AGENT_DATA_MODEL",
+                    "code": "unknown_model",
+                    "message": (
+                        "The selected Agent data-gathering model is not declared by the current enabled channels "
+                        "or advanced model routing config. "
+                        f"Available models: {', '.join(available_models[:6])}"
+                    ),
+                    "severity": "error",
+                    "expected": "one configured channel model",
+                    "actual": configured_data_model,
                 }
             )
 
@@ -1409,7 +1583,9 @@ class SystemConfigService:
         ]
         invalid_fallbacks = [
             model for model in fallback_models
-            if model not in available_model_set and not _uses_direct_env_provider(model)
+            if model not in available_model_set
+            and not _uses_direct_env_provider(model)
+            and not SystemConfigService._has_runtime_source_for_model(model, effective_map)
         ]
         if invalid_fallbacks:
             issues.append(
@@ -1427,7 +1603,12 @@ class SystemConfigService:
             )
 
         vision_model = (effective_map.get("VISION_MODEL") or "").strip()
-        if vision_model and vision_model not in available_model_set and not _uses_direct_env_provider(vision_model):
+        if (
+            vision_model
+            and vision_model not in available_model_set
+            and not _uses_direct_env_provider(vision_model)
+            and not SystemConfigService._has_runtime_source_for_model(vision_model, effective_map)
+        ):
             issues.append(
                 {
                     "key": "VISION_MODEL",

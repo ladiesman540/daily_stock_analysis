@@ -107,6 +107,33 @@ class UpdateSystemConfigResponse(BaseModel):
     warnings: List[str] = Field(default_factory=list)
 
 
+class OpenAICodexAuthStatusResponse(BaseModel):
+    """Safe local Codex/ChatGPT auth status."""
+
+    enabled: bool = False
+    recommended_model: str = "openai/gpt-5.5"
+    auth_path: str
+    cli_path: str
+    auth_file_exists: bool = False
+    auth_mode: str = ""
+    account_id: str = ""
+    logged_in: bool = False
+    token_present: bool = False
+    token_expires_at: Optional[int] = None
+    token_expired: bool = False
+    status_message: str = ""
+
+
+class UseOpenAICodexAuthRequest(BaseModel):
+    """Enable local Codex/ChatGPT auth for OpenAI model calls."""
+
+    config_version: str
+    mask_token: str = "******"
+    reasoning_model: str = "openai/gpt-5.5"
+    data_model: str = ""
+    reload_now: bool = True
+
+
 class ValidateSystemConfigRequest(BaseModel):
     """Validation request payload."""
 

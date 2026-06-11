@@ -21,9 +21,11 @@ from src.config import (
     get_api_keys_for_model,
     get_config,
     get_configured_llm_models,
+    get_effective_agent_data_models_to_try,
     get_effective_agent_models_to_try,
     get_effective_agent_primary_model,
 )
+from src.services.codex_auth_bridge import run_codex_exec_text
 
 logger = logging.getLogger(__name__)
 
@@ -253,6 +255,7 @@ class LLMToolAdapter:
         tools: List[dict],
         provider: Optional[str] = None,
         timeout: Optional[float] = None,
+        purpose: str = "reasoning",
     ) -> LLMResponse:
         """Send messages + tool declarations to LLM, return normalized response.
 
@@ -261,11 +264,19 @@ class LLMToolAdapter:
                       [{"role": "system"/"user"/"assistant"/"tool", "content": ...}, ...]
             tools: OpenAI-format tool declarations; litellm converts to each provider's format.
             provider: Ignored (kept for backward compatibility).
+            purpose: "reasoning" for final analyst synthesis, "data" for cheaper
+                     planning/extraction/input preparation calls.
 
         Returns:
             LLMResponse with either content (final answer) or tool_calls.
         """
-        return self.call_completion(messages, tools=tools, provider=provider, timeout=timeout)
+        return self.call_completion(
+            messages,
+            tools=tools,
+            provider=provider,
+            timeout=timeout,
+            purpose=purpose,
+        )
 
     def call_text(
         self,
@@ -275,6 +286,8 @@ class LLMToolAdapter:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         timeout: Optional[float] = None,
+        purpose: str = "reasoning",
+        allow_fallback: bool = True,
     ) -> LLMResponse:
         """Send a text-only completion through the shared routing stack."""
         return self.call_completion(
@@ -284,6 +297,8 @@ class LLMToolAdapter:
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=timeout,
+            purpose=purpose,
+            allow_fallback=allow_fallback,
         )
 
     def call_completion(
@@ -295,10 +310,18 @@ class LLMToolAdapter:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         timeout: Optional[float] = None,
+        purpose: str = "reasoning",
+        allow_fallback: bool = True,
     ) -> LLMResponse:
         """Shared completion path for both tool and text-only calls."""
         config = self._config
-        models_to_try = get_effective_agent_models_to_try(config)
+        purpose_key = (purpose or "reasoning").strip().lower()
+        if purpose_key in {"data", "input", "gathering", "extraction"}:
+            models_to_try = get_effective_agent_data_models_to_try(config)
+        else:
+            models_to_try = get_effective_agent_models_to_try(config)
+        if not allow_fallback and models_to_try:
+            models_to_try = models_to_try[:1]
         started_at = time.time()
         providers = [self._get_model_provider(model) for model in models_to_try]
 
@@ -396,6 +419,22 @@ class LLMToolAdapter:
         if tools:
             call_kwargs["tools"] = tools
 
+        if not tools and self._should_use_codex_exec(model):
+            content = run_codex_exec_text(
+                self._messages_to_codex_prompt(openai_messages),
+                model=model,
+                auth_path=getattr(self._config, "openai_codex_auth_path", ""),
+                cli_path=getattr(self._config, "openai_codex_cli_path", ""),
+                timeout_seconds=timeout,
+            )
+            return LLMResponse(
+                content=content,
+                tool_calls=[],
+                usage={},
+                provider="openai",
+                model=model,
+            )
+
         # Use Router for primary model (multi-key), direct litellm for others
         use_channel_router = self._has_channel_config()
         _router_model_names = set(get_configured_llm_models(self._config.llm_model_list))
@@ -417,6 +456,38 @@ class LLMToolAdapter:
             response = litellm.completion(**call_kwargs)
 
         return self._parse_litellm_response(response, model)
+
+    def _should_use_codex_exec(self, model: str) -> bool:
+        """Use Codex CLI for ChatGPT-login OpenAI text calls."""
+        if getattr(self._config, "openai_codex_auth_enabled", False) is not True:
+            return False
+        if getattr(self._config, "openai_api_keys", None):
+            return False
+        provider = self._get_model_provider(model)
+        return provider == "openai"
+
+    @staticmethod
+    def _messages_to_codex_prompt(messages: List[Dict[str, Any]]) -> str:
+        """Flatten text-only chat messages for Codex CLI final synthesis."""
+        parts: List[str] = [
+            "Do not run commands or inspect local files. Answer using only the conversation content below."
+        ]
+        for msg in messages:
+            role = str(msg.get("role") or "user")
+            content = msg.get("content")
+            if isinstance(content, list):
+                rendered = []
+                for item in content:
+                    if isinstance(item, str):
+                        rendered.append(item)
+                    elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                        rendered.append(item["text"])
+                content_text = "\n".join(rendered)
+            else:
+                content_text = str(content or "")
+            if content_text.strip():
+                parts.append(f"\n[{role}]\n{content_text.strip()}")
+        return "\n".join(parts).strip()
 
     def _get_temperature(self, model: str) -> float:
         """Return unified temperature from config."""

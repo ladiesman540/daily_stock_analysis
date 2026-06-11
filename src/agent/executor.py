@@ -16,6 +16,7 @@ same implementation.
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -26,6 +27,27 @@ from src.report_language import normalize_report_language
 from src.market_context import get_market_role, get_market_guidelines
 
 logger = logging.getLogger(__name__)
+
+
+_HAN_RE = re.compile(r"[\u3400-\u9fff]")
+
+
+def _contains_han_text(value: Any) -> bool:
+    return isinstance(value, str) and bool(_HAN_RE.search(value))
+
+
+def _english_chat_history(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Drop legacy non-English chat turns so they cannot steer new replies."""
+    cleaned: List[Dict[str, Any]] = []
+    for item in history:
+        content = item.get("content")
+        role = item.get("role")
+        if role not in {"user", "assistant", "system"} or not isinstance(content, str):
+            continue
+        if _contains_han_text(content):
+            continue
+        cleaned.append(item)
+    return cleaned
 
 
 # ============================================================
@@ -540,7 +562,10 @@ class AgentExecutor:
 
         # Get conversation history
         session = conversation_manager.get_or_create(session_id)
+        report_language = normalize_report_language((context or {}).get("report_language", "zh"))
         history = session.get_history()
+        if report_language == "en":
+            history = _english_chat_history(history)
 
         # Initialize conversation
         messages: List[Dict[str, Any]] = [
@@ -552,25 +577,60 @@ class AgentExecutor:
         if context:
             context_parts = []
             if context.get("stock_code"):
-                context_parts.append(f"股票代码: {context['stock_code']}")
+                context_parts.append(
+                    f"Stock code: {context['stock_code']}"
+                    if report_language == "en"
+                    else f"股票代码: {context['stock_code']}"
+                )
             if context.get("stock_name"):
-                context_parts.append(f"股票名称: {context['stock_name']}")
+                context_parts.append(
+                    f"Stock name: {context['stock_name']}"
+                    if report_language == "en"
+                    else f"股票名称: {context['stock_name']}"
+                )
             if context.get("previous_price"):
-                context_parts.append(f"上次分析价格: {context['previous_price']}")
+                context_parts.append(
+                    f"Previous analysis price: {context['previous_price']}"
+                    if report_language == "en"
+                    else f"上次分析价格: {context['previous_price']}"
+                )
             if context.get("previous_change_pct"):
-                context_parts.append(f"上次涨跌幅: {context['previous_change_pct']}%")
+                context_parts.append(
+                    f"Previous percent change: {context['previous_change_pct']}%"
+                    if report_language == "en"
+                    else f"上次涨跌幅: {context['previous_change_pct']}%"
+                )
             if context.get("previous_analysis_summary"):
                 summary = context["previous_analysis_summary"]
                 summary_text = json.dumps(summary, ensure_ascii=False) if isinstance(summary, dict) else str(summary)
-                context_parts.append(f"上次分析摘要:\n{summary_text}")
+                context_parts.append(
+                    f"Previous analysis summary:\n{summary_text}"
+                    if report_language == "en"
+                    else f"上次分析摘要:\n{summary_text}"
+                )
             if context.get("previous_strategy"):
                 strategy = context["previous_strategy"]
                 strategy_text = json.dumps(strategy, ensure_ascii=False) if isinstance(strategy, dict) else str(strategy)
-                context_parts.append(f"上次策略分析:\n{strategy_text}")
+                context_parts.append(
+                    f"Previous strategy analysis:\n{strategy_text}"
+                    if report_language == "en"
+                    else f"上次策略分析:\n{strategy_text}"
+                )
             if context_parts:
-                context_msg = "[系统提供的历史分析上下文，可供参考对比]\n" + "\n".join(context_parts)
+                context_msg = (
+                    "[Historical analysis context provided by the system]\n"
+                    if report_language == "en"
+                    else "[系统提供的历史分析上下文，可供参考对比]\n"
+                ) + "\n".join(context_parts)
                 messages.append({"role": "user", "content": context_msg})
-                messages.append({"role": "assistant", "content": "好的，我已了解该股票的历史分析数据。请告诉我你想了解什么？"})
+                messages.append({
+                    "role": "assistant",
+                    "content": (
+                        "Understood. I have the prior analysis context. What would you like to examine?"
+                        if report_language == "en"
+                        else "好的，我已了解该股票的历史分析数据。请告诉我你想了解什么？"
+                    ),
+                })
 
         messages.append({"role": "user", "content": message})
 
@@ -583,7 +643,10 @@ class AgentExecutor:
         if result.success:
             conversation_manager.add_message(session_id, "assistant", result.content)
         else:
-            error_note = f"[分析失败] {result.error or '未知错误'}"
+            if report_language == "en":
+                error_note = f"[Analysis failed] {result.error or 'Unknown error'}"
+            else:
+                error_note = f"[分析失败] {result.error or '未知错误'}"
             conversation_manager.add_message(session_id, "assistant", error_note)
 
         return result
@@ -595,6 +658,7 @@ class AgentExecutor:
         inline implementation while sharing the single authoritative loop
         in :mod:`src.agent.runner`.
         """
+        split_chat_models = isinstance(self.llm_adapter, LLMToolAdapter) and not parse_dashboard
         loop_result = run_agent_loop(
             messages=messages,
             tool_registry=self.tool_registry,
@@ -602,6 +666,8 @@ class AgentExecutor:
             max_steps=self.max_steps,
             progress_callback=progress_callback,
             max_wall_clock_seconds=self.timeout_seconds,
+            tool_call_purpose="data" if split_chat_models else "reasoning",
+            final_synthesis_enabled=split_chat_models,
         )
 
         model_str = loop_result.model
@@ -638,21 +704,36 @@ class AgentExecutor:
         if context:
             report_language = normalize_report_language(context.get("report_language", "zh"))
             if context.get("stock_code"):
-                parts.append(f"\n股票代码: {context['stock_code']}")
+                parts.append(
+                    f"\nStock code: {context['stock_code']}"
+                    if report_language == "en"
+                    else f"\n股票代码: {context['stock_code']}"
+                )
             if context.get("report_type"):
-                parts.append(f"报告类型: {context['report_type']}")
+                parts.append(
+                    f"Report type: {context['report_type']}"
+                    if report_language == "en"
+                    else f"报告类型: {context['report_type']}"
+                )
             if report_language == "en":
-                parts.append("输出语言: English（所有 JSON 键名保持不变，所有面向用户的文本值使用英文）")
+                parts.append("Output language: English. Keep JSON keys unchanged; write every user-facing value in English.")
             else:
                 parts.append("输出语言: 中文（所有 JSON 键名保持不变，所有面向用户的文本值使用中文）")
 
             # Inject pre-fetched context data to avoid redundant fetches
             if context.get("realtime_quote"):
-                parts.append(f"\n[系统已获取的实时行情]\n{json.dumps(context['realtime_quote'], ensure_ascii=False)}")
+                heading = "[System-provided realtime quote]" if report_language == "en" else "[系统已获取的实时行情]"
+                parts.append(f"\n{heading}\n{json.dumps(context['realtime_quote'], ensure_ascii=False)}")
             if context.get("chip_distribution"):
-                parts.append(f"\n[系统已获取的筹码分布]\n{json.dumps(context['chip_distribution'], ensure_ascii=False)}")
+                heading = "[System-provided holder distribution]" if report_language == "en" else "[系统已获取的筹码分布]"
+                parts.append(f"\n{heading}\n{json.dumps(context['chip_distribution'], ensure_ascii=False)}")
             if context.get("news_context"):
-                parts.append(f"\n[系统已获取的新闻与舆情情报]\n{context['news_context']}")
+                heading = "[System-provided news and sentiment intelligence]" if report_language == "en" else "[系统已获取的新闻与舆情情报]"
+                parts.append(f"\n{heading}\n{context['news_context']}")
 
-        parts.append("\n请使用可用工具获取缺失的数据（如历史K线、新闻等），然后以决策仪表盘 JSON 格式输出分析结果。")
+        report_language = normalize_report_language((context or {}).get("report_language", "zh"))
+        if report_language == "en":
+            parts.append("\nUse available tools to fetch missing data, then output the analysis as decision-dashboard JSON.")
+        else:
+            parts.append("\n请使用可用工具获取缺失的数据（如历史K线、新闻等），然后以决策仪表盘 JSON 格式输出分析结果。")
         return "\n".join(parts)
