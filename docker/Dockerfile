@@ -64,8 +64,8 @@ ENV API_PORT=8000
 # 暴露 API 端口
 EXPOSE 8000
 
-# 数据卷（持久化数据）
-VOLUME ["/app/data", "/app/logs", "/app/reports"]
+# 数据持久化：compose 通过显式挂载提供数据卷；Railway 等平台使用自带的
+# Volume 功能（Dockerfile VOLUME 指令在 Railway 不受支持，已移除）。
 
 # 健康检查（FastAPI 模式）
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
