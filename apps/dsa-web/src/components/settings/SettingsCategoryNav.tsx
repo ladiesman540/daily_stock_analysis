@@ -20,8 +20,8 @@ export const SettingsCategoryNav: React.FC<SettingsCategoryNavProps> = ({
   return (
     <div className="h-full rounded-[1.5rem] border settings-border bg-card/94 p-4 shadow-soft-card-strong backdrop-blur-sm">
       <div className="mb-4">
-        <p className="settings-accent-text text-xs font-semibold uppercase tracking-[0.3em]">配置分类</p>
-        <p className="mt-1 text-[11px] leading-relaxed text-muted-text">按模块整理系统设置与认证能力。</p>
+        <p className="settings-accent-text text-xs font-semibold uppercase tracking-[0.3em]">Categories</p>
+        <p className="mt-1 text-[11px] leading-relaxed text-muted-text">System settings and authentication grouped by module.</p>
       </div>
 
       <div className="space-y-2.5">

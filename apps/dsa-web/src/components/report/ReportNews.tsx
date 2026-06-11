@@ -14,6 +14,15 @@ interface ReportNewsProps {
   language?: ReportLanguage;
 }
 
+function formatDimension(value?: string): string {
+  if (!value) return 'Context';
+  return value
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
 /**
  * 资讯区组件 - 终端风格
  */
@@ -113,6 +122,24 @@ export const ReportNews: React.FC<ReportNewsProps> = ({ recordId, limit = 8, lan
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0 text-left">
+                  <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px] leading-5 text-secondary-text">
+                    <span className="rounded-md border border-primary/30 bg-primary/10 px-2 py-0.5 font-medium text-primary">
+                      {item.relevanceLabel || 'Related context'}
+                    </span>
+                    <span className="rounded-md border border-subtle bg-surface/60 px-2 py-0.5">
+                      {formatDimension(item.dimension)}
+                    </span>
+                    {item.freshnessLabel ? (
+                      <span className="rounded-md border border-subtle bg-surface/60 px-2 py-0.5">
+                        {item.freshnessLabel}
+                      </span>
+                    ) : null}
+                    {item.source ? (
+                      <span className="rounded-md border border-subtle bg-surface/60 px-2 py-0.5">
+                        {item.source}
+                      </span>
+                    ) : null}
+                  </div>
                   <p className="home-news-title text-sm font-medium leading-6 text-foreground text-left">
                     {item.title}
                   </p>
@@ -121,6 +148,11 @@ export const ReportNews: React.FC<ReportNewsProps> = ({ recordId, limit = 8, lan
                       {item.snippet}
                     </p>
                   )}
+                  {item.relevanceReason ? (
+                    <p className="mt-2 text-xs leading-5 text-muted-text">
+                      Why it matters: {item.relevanceReason}
+                    </p>
+                  ) : null}
                 </div>
                 {item.url && (
                   <a

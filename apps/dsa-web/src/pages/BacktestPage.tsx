@@ -161,7 +161,7 @@ const RunSummary: React.FC<{ data: BacktestRunResponse }> = ({ data }) => (
 const BacktestPage: React.FC = () => {
   // Set page title
   useEffect(() => {
-    document.title = '策略回测 - DSA';
+    document.title = 'Strategy Backtest - DSA';
   }, []);
 
   // Input state
@@ -212,9 +212,11 @@ const BacktestPage: React.FC = () => {
       setTotalResults(response.total);
       setCurrentPage(response.page);
       setPageError(null);
+      return response;
     } catch (err) {
       console.error('Failed to fetch backtest results:', err);
       setPageError(getParsedApiError(err));
+      return null;
     } finally {
       setIsLoadingResults(false);
     }
@@ -258,15 +260,18 @@ const BacktestPage: React.FC = () => {
   // Initial load — fetch performance first, then filter results by its window
   useEffect(() => {
     const init = async () => {
-      // Get latest performance (unfiltered returns most recent summary)
+      const initialResults = await fetchResults(1, undefined, undefined, undefined, undefined);
+      if (!initialResults || initialResults.total === 0) {
+        setOverallPerf(null);
+        setStockPerf(null);
+        return;
+      }
+
       const overall = await backtestApi.getOverallPerformance();
       setOverallPerf(overall);
-      // Use the summary's eval_window_days to filter results consistently
       const windowDays = overall?.evalWindowDays;
-      if (windowDays && !evalDays) {
-        setEvalDays(String(windowDays));
-      }
-      fetchResults(1, undefined, windowDays, undefined, undefined);
+      if (windowDays && !evalDays) setEvalDays(String(windowDays));
+      if (windowDays) fetchResults(1, undefined, windowDays, undefined, undefined);
     };
     init();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -297,26 +302,36 @@ const BacktestPage: React.FC = () => {
   };
 
   // Filter by code
-  const handleFilter = () => {
+  const handleFilter = async () => {
     const code = codeFilter.trim() || undefined;
     const windowDays = evalDays ? parseInt(evalDays, 10) : undefined;
     setCurrentPage(1);
-    fetchResults(1, code, windowDays, analysisDateFrom, analysisDateTo);
-    fetchPerformance(code, windowDays, analysisDateFrom, analysisDateTo);
+    const response = await fetchResults(1, code, windowDays, analysisDateFrom, analysisDateTo);
+    if (response && response.total > 0) {
+      fetchPerformance(code, windowDays, analysisDateFrom, analysisDateTo);
+    } else {
+      setOverallPerf(null);
+      setStockPerf(null);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
-      handleFilter();
+      void handleFilter();
     }
   };
 
-  const handleShowNextDay = () => {
+  const handleShowNextDay = async () => {
     const code = codeFilter.trim() || undefined;
     setEvalDays('1');
     setCurrentPage(1);
-    fetchResults(1, code, 1, analysisDateFrom, analysisDateTo);
-    fetchPerformance(code, 1, analysisDateFrom, analysisDateTo);
+    const response = await fetchResults(1, code, 1, analysisDateFrom, analysisDateTo);
+    if (response && response.total > 0) {
+      fetchPerformance(code, 1, analysisDateFrom, analysisDateTo);
+    } else {
+      setOverallPerf(null);
+      setStockPerf(null);
+    }
   };
 
   // Pagination
@@ -327,17 +342,26 @@ const BacktestPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-full flex flex-col rounded-[1.5rem] bg-transparent">
+    <div className="flex min-h-full flex-col overflow-hidden rounded-2xl border border-border/60 bg-card/45 shadow-soft-card">
       {/* Header */}
-      <header className="flex-shrink-0 border-b border-white/5 px-3 py-3 sm:px-4">
-        <div className="flex max-w-5xl flex-wrap items-center gap-2">
-          <div className="relative min-w-0 flex-[1_1_220px]">
+      <header className="flex-shrink-0 border-b border-white/5 px-3 py-4 sm:px-4">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+          <div className="max-w-2xl">
+            <p className="label-uppercase">Strategy validation</p>
+            <h1 className="mt-1 text-xl font-semibold text-foreground md:text-2xl">Backtest</h1>
+            <p className="mt-1 text-sm text-secondary-text">
+              Check whether past AI calls matched future price movement before trusting a setup.
+            </p>
+          </div>
+        </div>
+        <div className="grid w-full gap-2 rounded-2xl border border-border/60 bg-elevated/35 p-3 sm:grid-cols-2 xl:flex xl:max-w-6xl xl:flex-wrap xl:items-center">
+          <div className="relative min-w-0 sm:col-span-2 xl:col-span-1 xl:flex-[1_1_260px]">
             <input
               type="text"
               value={codeFilter}
               onChange={(e) => setCodeFilter(e.target.value.toUpperCase())}
               onKeyDown={handleKeyDown}
-              placeholder="Filter by stock code (leave empty for all)"
+              placeholder="Stock code (optional)"
               disabled={isRunning}
               className={BACKTEST_INPUT_CLASS}
             />
@@ -346,11 +370,11 @@ const BacktestPage: React.FC = () => {
             type="button"
             onClick={handleFilter}
             disabled={isLoadingResults}
-            className="btn-secondary flex items-center gap-1.5 whitespace-nowrap"
+            className="btn-secondary flex items-center justify-center gap-1.5 whitespace-nowrap"
           >
             Filter
           </button>
-          <div className="flex items-center gap-2 whitespace-nowrap lg:w-40 lg:justify-between">
+          <div className="flex items-center justify-between gap-2 whitespace-nowrap rounded-xl border border-border/50 bg-card/45 px-3 py-2 xl:w-40">
             <span className="text-xs text-muted-text">Window</span>
             <input
               type="number"
@@ -363,7 +387,7 @@ const BacktestPage: React.FC = () => {
               className={`${BACKTEST_COMPACT_INPUT_CLASS} w-24 text-center tabular-nums`}
             />
           </div>
-          <div className="flex items-center gap-2 whitespace-nowrap">
+          <div className="flex items-center justify-between gap-2 whitespace-nowrap rounded-xl border border-border/50 bg-card/45 px-3 py-2">
             <span className="text-xs text-muted-text">From</span>
             <input
               type="date"
@@ -375,7 +399,7 @@ const BacktestPage: React.FC = () => {
               className={`${BACKTEST_COMPACT_INPUT_CLASS} w-40 text-center tabular-nums`}
             />
           </div>
-          <div className="flex items-center gap-2 whitespace-nowrap">
+          <div className="flex items-center justify-between gap-2 whitespace-nowrap rounded-xl border border-border/50 bg-card/45 px-3 py-2">
             <span className="text-xs text-muted-text">To</span>
             <input
               type="date"
@@ -391,7 +415,7 @@ const BacktestPage: React.FC = () => {
             type="button"
             onClick={handleShowNextDay}
             disabled={isLoadingResults || isLoadingPerf}
-            className={`backtest-force-btn ${isNextDayValidation ? 'active' : ''}`}
+            className={`backtest-force-btn justify-center ${isNextDayValidation ? 'active' : ''}`}
           >
             <span className="dot" />
             1D Validation
@@ -400,7 +424,7 @@ const BacktestPage: React.FC = () => {
             type="button"
             onClick={() => setForceRerun(!forceRerun)}
             disabled={isRunning}
-            className={`backtest-force-btn ${forceRerun ? 'active' : ''}`}
+            className={`backtest-force-btn justify-center ${forceRerun ? 'active' : ''}`}
           >
             <span className="dot" />
             Force
@@ -409,7 +433,7 @@ const BacktestPage: React.FC = () => {
             type="button"
             onClick={handleRun}
             disabled={isRunning}
-            className="btn-primary flex items-center gap-1.5 whitespace-nowrap"
+            className="btn-primary flex items-center justify-center gap-1.5 whitespace-nowrap"
           >
             {isRunning ? (
               <>

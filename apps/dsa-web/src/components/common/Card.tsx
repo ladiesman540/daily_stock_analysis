@@ -45,9 +45,9 @@ export const Card: React.FC<CardProps> = ({
       <div className={cn(variantStyles.gradient, className)} style={style}>
         <div className={cn('gradient-border-card-inner', paddingStyles[padding])}>
           {(title || subtitle) && (
-            <div className="mb-3">
+            <div className="mb-4">
               {subtitle ? <span className="label-uppercase">{subtitle}</span> : null}
-              {title ? <h3 className="mt-1 text-lg font-semibold text-foreground">{title}</h3> : null}
+              {title ? <h3 className="mt-1 text-lg font-semibold leading-tight text-foreground">{title}</h3> : null}
             </div>
           )}
           {children}
@@ -62,9 +62,9 @@ export const Card: React.FC<CardProps> = ({
       className={cn('rounded-2xl', variantStyles[variant], hoverStyles, paddingStyles[padding], className)}
     >
       {(title || subtitle) && (
-        <div className="mb-3">
+        <div className="mb-4">
           {subtitle ? <span className="label-uppercase">{subtitle}</span> : null}
-          {title ? <h3 className="mt-1 text-lg font-semibold text-foreground">{title}</h3> : null}
+          {title ? <h3 className="mt-1 text-lg font-semibold leading-tight text-foreground">{title}</h3> : null}
         </div>
       )}
       {children}

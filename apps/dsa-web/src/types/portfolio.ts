@@ -76,6 +76,17 @@ export interface PortfolioSnapshotResponse {
   accounts: PortfolioAccountSnapshot[];
 }
 
+export interface PortfolioEquityPoint {
+  date: string;
+  equity: number;
+  currency: string;
+}
+
+export interface PortfolioEquityHistoryResponse {
+  days: number;
+  points: PortfolioEquityPoint[];
+}
+
 export interface PortfolioConcentrationItem {
   symbol: string;
   marketValueBase: number;

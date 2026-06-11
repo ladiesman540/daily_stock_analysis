@@ -23,19 +23,19 @@ export const ChangePasswordCard: React.FC = () => {
     setSuccess(false);
 
     if (!currentPassword.trim()) {
-      setError('请输入当前密码');
+      setError('Enter your current password');
       return;
     }
     if (!newPassword.trim()) {
-      setError('请输入新密码');
+      setError('Enter a new password');
       return;
     }
     if (newPassword.length < 6) {
-      setError('新密码至少 6 位');
+      setError('New password must be at least 6 characters');
       return;
     }
     if (newPassword !== newPasswordConfirm) {
-      setError('两次输入的新密码不一致');
+      setError('The new passwords do not match');
       return;
     }
 
@@ -49,7 +49,7 @@ export const ChangePasswordCard: React.FC = () => {
         setNewPasswordConfirm('');
         setTimeout(() => setSuccess(false), 4000);
       } else {
-        setError(result.error ?? '修改失败');
+        setError(result.error ?? 'Password update failed');
       }
     } finally {
       setIsSubmitting(false);
@@ -58,8 +58,8 @@ export const ChangePasswordCard: React.FC = () => {
 
   return (
     <SettingsSectionCard
-      title="修改密码"
-      description="更新当前管理员登录密码。修改成功后，后续登录请使用新密码。"
+      title="Change Password"
+      description="Update the current admin login password. Use the new password for future logins."
     >
       <form onSubmit={handleSubmit} className="space-y-3">
         <div className="grid gap-4 md:grid-cols-2">
@@ -69,8 +69,8 @@ export const ChangePasswordCard: React.FC = () => {
               type="password"
               allowTogglePassword
               iconType="password"
-              label="当前密码"
-              placeholder="输入当前密码"
+              label="Current Password"
+              placeholder="Enter current password"
               value={currentPassword}
               onChange={(e) => setCurrentPassword(e.target.value)}
               disabled={isSubmitting}
@@ -84,9 +84,9 @@ export const ChangePasswordCard: React.FC = () => {
               type="password"
               allowTogglePassword
               iconType="password"
-              label="新密码"
-              hint="至少 6 位。"
-              placeholder="输入新密码"
+              label="New Password"
+              hint="At least 6 characters."
+              placeholder="Enter new password"
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               disabled={isSubmitting}
@@ -101,8 +101,8 @@ export const ChangePasswordCard: React.FC = () => {
             type="password"
             allowTogglePassword
             iconType="password"
-            label="确认新密码"
-            placeholder="再次输入新密码"
+            label="Confirm New Password"
+            placeholder="Enter the new password again"
             value={newPasswordConfirm}
             onChange={(e) => setNewPasswordConfirm(e.target.value)}
             disabled={isSubmitting}
@@ -112,15 +112,15 @@ export const ChangePasswordCard: React.FC = () => {
 
         {error
           ? isParsedApiError(error)
-            ? <SettingsAlert title="修改失败" message={error.message} variant="error" className="!mt-3" />
-            : <SettingsAlert title="修改失败" message={error} variant="error" className="!mt-3" />
+            ? <SettingsAlert title="Password Update Failed" message={error.message} variant="error" className="!mt-3" />
+            : <SettingsAlert title="Password Update Failed" message={error} variant="error" className="!mt-3" />
           : null}
         {success ? (
-          <SettingsAlert title="修改成功" message="管理员密码已更新。" variant="success" />
+          <SettingsAlert title="Password Updated" message="Admin password updated." variant="success" />
         ) : null}
 
         <Button type="submit" variant="primary" isLoading={isSubmitting}>
-          保存新密码
+          Save New Password
         </Button>
       </form>
     </SettingsSectionCard>

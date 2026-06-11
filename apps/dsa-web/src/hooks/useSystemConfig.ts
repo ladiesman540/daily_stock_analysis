@@ -290,8 +290,8 @@ export function useSystemConfig() {
 
   const save = useCallback(async (): Promise<SaveResult> => {
     if (!hasDirty) {
-      setToast({ type: 'success', message: '当前没有可保存的修改。' });
-      return { success: true, message: '当前没有可保存的修改' };
+      setToast({ type: 'success', message: 'No changes to save.' });
+      return { success: true, message: 'No changes to save' };
     }
 
     setIsSaving(true);
@@ -306,15 +306,15 @@ export function useSystemConfig() {
 
       if (!validateResult.valid) {
         setSaveError(createParsedApiError({
-          title: '配置校验未通过',
-          message: '请先修正表单错误后再保存。',
-          rawMessage: '配置校验未通过，请先修正表单错误。',
+          title: 'Config Validation Failed',
+          message: 'Fix the form errors before saving.',
+          rawMessage: 'Config validation failed. Fix form errors before saving.',
           category: 'http_error',
         }));
         setRetryAction('save');
         return {
           success: false,
-          message: '配置校验未通过',
+          message: 'Config validation failed',
           issues: validateResult.issues,
         };
       }
@@ -330,9 +330,9 @@ export function useSystemConfig() {
       applyServerPayload(refreshed.items, refreshed.configVersion, refreshed.maskToken);
 
       const warningText = updateResult.warnings?.length
-        ? `；警告：${updateResult.warnings.join('；')}`
+        ? `; warnings: ${updateResult.warnings.join('; ')}`
         : '';
-      setToast({ type: 'success', message: `配置已更新${warningText}` });
+      setToast({ type: 'success', message: `Config updated${warningText}` });
       return { success: true };
     } catch (error: unknown) {
       if (error instanceof SystemConfigValidationError) {
@@ -340,8 +340,8 @@ export function useSystemConfig() {
         setSaveError(error.parsedError);
       } else if (error instanceof SystemConfigConflictError) {
         setSaveError(createParsedApiError({
-          title: '配置版本冲突',
-          message: `${error.message}，请先重新加载配置。`,
+          title: 'Config Version Conflict',
+          message: `${error.message}. Reload settings first.`,
           rawMessage: error.parsedError.rawMessage,
           status: error.parsedError.status,
           category: error.parsedError.category,
@@ -352,7 +352,7 @@ export function useSystemConfig() {
 
       setToast({ type: 'error', error: getParsedApiError(error) });
       setRetryAction('save');
-      return { success: false, message: '保存失败' };
+      return { success: false, message: 'Save failed' };
     } finally {
       setIsSaving(false);
     }

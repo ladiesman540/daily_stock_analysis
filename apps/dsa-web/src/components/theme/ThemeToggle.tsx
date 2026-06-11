@@ -12,19 +12,19 @@ const THEME_OPTIONS: Array<{
   label: string;
   icon: typeof Sun;
 }> = [
-  { value: 'light', label: '浅色', icon: Sun },
-  { value: 'dark', label: '深色', icon: Moon },
-  { value: 'system', label: '跟随系统', icon: Monitor },
+  { value: 'light', label: 'Light', icon: Sun },
+  { value: 'dark', label: 'Dark', icon: Moon },
+  { value: 'system', label: 'System', icon: Monitor },
 ];
 
 function resolveThemeLabel(theme: string | undefined) {
   switch (theme) {
     case 'light':
-      return '浅色';
+      return 'Light';
     case 'dark':
-      return '深色';
+      return 'Dark';
     default:
-      return '跟随系统';
+      return 'System';
   }
 }
 
@@ -71,17 +71,17 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({
         data-state={open ? 'open' : 'closed'}
         className={cn(
           isNavVariant
-            ? 'group relative flex h-12 w-full select-none items-center gap-3 rounded-[1.35rem] border border-transparent px-4 text-sm text-secondary-text transition-all duration-300 hover:bg-hover hover:text-foreground data-[state=open]:border-subtle data-[state=open]:bg-subtle data-[state=open]:text-foreground'
-            : 'inline-flex h-10 items-center gap-2 rounded-xl border border-border/70 bg-card/80 px-3 text-sm text-secondary-text shadow-soft-card transition-colors hover:bg-hover hover:text-foreground',
+            ? 'group relative flex h-11 w-full select-none items-center gap-3 rounded-xl border border-transparent px-3 text-sm text-secondary-text transition-all duration-200 hover:bg-hover hover:text-foreground data-[state=open]:border-border data-[state=open]:bg-hover data-[state=open]:text-foreground'
+            : 'inline-flex h-10 items-center gap-2 rounded-xl border border-border/80 bg-card/95 px-3 text-sm text-secondary-text shadow-soft-card backdrop-blur-md transition-colors hover:bg-hover hover:text-foreground',
           isNavVariant && collapsed ? 'justify-center px-2' : ''
         )}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="切换主题"
+        aria-label="Toggle theme"
       >
         <TriggerIcon className={cn('shrink-0', isNavVariant ? 'h-5 w-5' : 'h-4 w-4')} />
         {isNavVariant ? (
-          collapsed ? null : <span className="truncate text-[1.02rem] font-medium">主题</span>
+          collapsed ? null : <span className="truncate text-[1.02rem] font-medium">Theme</span>
         ) : (
           <span className="hidden sm:inline">{resolveThemeLabel(activeTheme)}</span>
         )}
@@ -90,9 +90,9 @@ export const ThemeToggle: React.FC<ThemeToggleProps> = ({
       {open ? (
         <div
           role="menu"
-          aria-label="主题模式"
+          aria-label="Theme mode"
           className={cn(
-            'z-[100] min-w-[8rem] overflow-hidden rounded-2xl border border-border/70 bg-elevated p-1.5 shadow-[0_24px_48px_rgba(3,8,20,0.32)] backdrop-blur-xl',
+            'z-[100] min-w-[8rem] overflow-hidden rounded-xl border border-border/80 bg-card p-1.5 shadow-soft-card',
             isNavVariant
               ? 'absolute bottom-full left-0 mb-2 w-max min-w-[9rem]'
               : 'absolute right-0 mt-2'

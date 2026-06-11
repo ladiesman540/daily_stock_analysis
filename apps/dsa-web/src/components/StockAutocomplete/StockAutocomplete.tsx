@@ -37,7 +37,7 @@ function FallbackInput({
   onChange,
   onSubmit,
   disabled = false,
-  placeholder = '输入股票代码或名称',
+  placeholder = 'Enter ticker or company name',
   className,
 }: StockAutocompleteProps) {
   return (
@@ -96,7 +96,7 @@ function StockAutocompleteInner({
   onChange,
   onSubmit,
   disabled = false,
-  placeholder = '输入股票代码或名称',
+  placeholder = 'Enter ticker or company name',
   className,
 }: StockAutocompleteProps) {
   const { index, loading, fallback } = useStockIndex();

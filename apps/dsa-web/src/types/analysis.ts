@@ -37,11 +37,6 @@ export interface ReportMeta {
 
 /** Sentiment label */
 export type SentimentLabel =
-  | '极度悲观'
-  | '悲观'
-  | '中性'
-  | '乐观'
-  | '极度乐观'
   | 'Very Bearish'
   | 'Bearish'
   | 'Neutral'
@@ -213,6 +208,12 @@ export interface NewsIntelItem {
   title: string;
   snippet: string;
   url: string;
+  source?: string;
+  publishedDate?: string;
+  dimension?: string;
+  relevanceLabel?: string;
+  relevanceReason?: string;
+  freshnessLabel?: string;
 }
 
 /** News response */
@@ -245,19 +246,13 @@ export interface ApiError {
 // ============ Helper Functions ============
 
 /** Get sentiment label by score */
-export const getSentimentLabel = (score: number, language: ReportLanguage = 'zh'): SentimentLabel => {
-  if (language === 'en') {
-    if (score <= 20) return 'Very Bearish';
-    if (score <= 40) return 'Bearish';
-    if (score <= 60) return 'Neutral';
-    if (score <= 80) return 'Bullish';
-    return 'Very Bullish';
-  }
-  if (score <= 20) return '极度悲观';
-  if (score <= 40) return '悲观';
-  if (score <= 60) return '中性';
-  if (score <= 80) return '乐观';
-  return '极度乐观';
+export const getSentimentLabel = (_score: number, _language: ReportLanguage = 'en'): SentimentLabel => {
+  const score = Number.isFinite(_score) ? _score : 50;
+  if (score <= 20) return 'Very Bearish';
+  if (score <= 40) return 'Bearish';
+  if (score <= 60) return 'Neutral';
+  if (score <= 80) return 'Bullish';
+  return 'Very Bullish';
 };
 
 /** Get sentiment color by score */

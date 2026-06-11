@@ -10,6 +10,7 @@ import type {
   PortfolioCorporateActionListResponse,
   PortfolioCostMethod,
   PortfolioDeleteResponse,
+  PortfolioEquityHistoryResponse,
   PortfolioEventCreatedResponse,
   PortfolioFxRefreshResponse,
   PortfolioImportBrokerListResponse,
@@ -123,6 +124,18 @@ export const portfolioApi = {
       params: buildSnapshotParams(query),
     });
     return toCamelCase<PortfolioSnapshotResponse>(response.data);
+  },
+
+  async getEquityHistory(query: { accountId?: number; days?: number } = {}): Promise<PortfolioEquityHistoryResponse> {
+    const params: Record<string, string | number> = {};
+    if (query.accountId != null) {
+      params.account_id = query.accountId;
+    }
+    if (query.days != null) {
+      params.days = query.days;
+    }
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/portfolio/equity-history', { params });
+    return toCamelCase<PortfolioEquityHistoryResponse>(response.data);
   },
 
   async getRisk(query: SnapshotQuery = {}): Promise<PortfolioRiskResponse> {

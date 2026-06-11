@@ -22,13 +22,13 @@ const ACTION_AI_STYLES = 'bg-[var(--home-action-ai-bg)] border border-[var(--hom
 const ACTION_REPORT_STYLES = 'bg-[var(--home-action-report-bg)] border border-[var(--home-action-report-border)] text-[var(--home-action-report-text)] hover:bg-[var(--home-action-report-hover-bg)]';
 
 const BUTTON_VARIANT_STYLES = {
-  primary: 'border border-cyan/30 bg-primary-gradient text-primary-foreground shadow-lg shadow-cyan/20 hover:brightness-105',
-  secondary: 'border border-border/70 bg-card text-foreground shadow-soft-card hover:bg-hover',
+  primary: 'border border-cyan/20 bg-primary-gradient text-primary-foreground shadow-soft-card hover:brightness-105',
+  secondary: 'border border-border/80 bg-card text-foreground shadow-soft-card hover:bg-hover',
   'settings-primary': 'border settings-button-primary hover:brightness-105 hover:shadow-xl',
   'settings-secondary': 'border settings-button-secondary hover:translate-y-[-1px]',
-  outline: 'border border-cyan/25 bg-transparent text-cyan hover:bg-cyan/10',
+  outline: 'border border-cyan/25 bg-card/80 text-cyan hover:bg-cyan/10',
   ghost: 'border border-transparent bg-transparent text-secondary-text hover:bg-hover hover:text-foreground',
-  gradient: 'border border-cyan/20 bg-gradient-to-r from-cyan to-purple text-primary-foreground shadow-lg shadow-cyan/20 hover:brightness-105',
+  gradient: 'border border-cyan/20 bg-primary-gradient text-primary-foreground shadow-soft-card hover:brightness-105',
   danger: 'border border-danger/40 bg-danger text-destructive-foreground shadow-lg shadow-danger/20 hover:brightness-105',
   'danger-subtle': 'border border-danger/60 bg-danger/10 text-danger hover:bg-danger/15',
   'action-primary': ACTION_AI_STYLES,
@@ -45,7 +45,7 @@ export const Button: React.FC<ButtonProps> = ({
   variant = 'primary',
   size = 'md',
   isLoading = false,
-  loadingText = '处理中...',
+  loadingText = 'Working...',
   glow = false,
   className = '',
   disabled,
@@ -60,7 +60,7 @@ export const Button: React.FC<ButtonProps> = ({
       aria-busy={isLoading || undefined}
       data-variant={variant}
       className={cn(
-        'inline-flex cursor-pointer items-center justify-center gap-2 font-medium transition-all duration-200',
+        'inline-flex cursor-pointer items-center justify-center gap-2 whitespace-nowrap font-medium transition-all duration-200 active:translate-y-px',
         'focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-cyan/15 focus-visible:ring-offset-0',
         'disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-50 disabled:transform-none',
         BUTTON_SIZE_STYLES[size],

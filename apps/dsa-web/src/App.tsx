@@ -2,15 +2,23 @@ import type React from 'react';
 import { useEffect } from 'react';
 import { BrowserRouter as Router, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import HomePage from './pages/HomePage';
+import TodayPage from './pages/TodayPage';
 import BacktestPage from './pages/BacktestPage';
 import SettingsPage from './pages/SettingsPage';
 import LoginPage from './pages/LoginPage';
 import NotFoundPage from './pages/NotFoundPage';
 import ChatPage from './pages/ChatPage';
 import PortfolioPage from './pages/PortfolioPage';
+import SignalsPage from './pages/SignalsPage';
+import RotationPage from './pages/RotationPage';
+import SourcesPage from './pages/SourcesPage';
+import PositioningPage from './pages/PositioningPage';
+import GuidePage from './pages/GuidePage';
+import DataPage from './pages/DataPage';
 import { ApiErrorAlert, Shell } from './components/common';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { useAgentChatStore } from './stores/agentChatStore';
+import { installEnglishOnlyDomGuard } from './utils/englishOnlyDom';
 import './App.css';
 
 const AppContent: React.FC = () => {
@@ -40,7 +48,7 @@ const AppContent: React.FC = () => {
           className="btn-primary"
           onClick={() => void refreshStatus()}
         >
-          重试
+          Retry
         </button>
       </div>
     );
@@ -61,8 +69,17 @@ const AppContent: React.FC = () => {
   return (
     <Routes>
       <Route element={<Shell />}>
-        <Route path="/" element={<HomePage />} />
+        <Route path="/" element={<TodayPage />} />
+        <Route path="/analyze" element={<HomePage />} />
+        {/* Muscle-memory redirect: the single-stock page used to be the home page. */}
+        <Route path="/home" element={<Navigate to="/analyze" replace />} />
+        <Route path="/guide" element={<GuidePage />} />
         <Route path="/chat" element={<ChatPage />} />
+        <Route path="/signals" element={<SignalsPage />} />
+        <Route path="/data" element={<DataPage />} />
+        <Route path="/rotation" element={<RotationPage />} />
+        <Route path="/positioning" element={<PositioningPage />} />
+        <Route path="/sources" element={<SourcesPage />} />
         <Route path="/portfolio" element={<PortfolioPage />} />
         <Route path="/backtest" element={<BacktestPage />} />
         <Route path="/settings" element={<SettingsPage />} />
@@ -74,6 +91,8 @@ const AppContent: React.FC = () => {
 };
 
 const App: React.FC = () => {
+  useEffect(() => installEnglishOnlyDomGuard(), []);
+
   return (
     <Router>
       <AuthProvider>

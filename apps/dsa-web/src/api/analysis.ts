@@ -147,7 +147,7 @@ export class DuplicateTaskError extends Error {
   existingTaskId: string;
 
   constructor(stockCode: string, existingTaskId: string, message?: string) {
-    super(message || `股票 ${stockCode} 正在分析中`);
+    super(message || `Ticker ${stockCode} is already being analyzed`);
     this.name = 'DuplicateTaskError';
     this.stockCode = stockCode;
     this.existingTaskId = existingTaskId;

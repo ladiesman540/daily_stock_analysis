@@ -6,6 +6,7 @@ import type {
   DiscoverLLMChannelModelsResponse,
   ExportSystemConfigResponse,
   ImportSystemConfigRequest,
+  OpenAICodexAuthStatusResponse,
   SystemConfigConflictResponse,
   SystemConfigResponse,
   SystemConfigSchemaResponse,
@@ -14,6 +15,7 @@ import type {
   TestLLMChannelResponse,
   UpdateSystemConfigRequest,
   UpdateSystemConfigResponse,
+  UseOpenAICodexAuthRequest,
   ValidateSystemConfigRequest,
   ValidateSystemConfigResponse,
 } from '../types/systemConfig';
@@ -27,7 +29,7 @@ export class SystemConfigValidationError extends Error {
     this.name = 'SystemConfigValidationError';
     this.issues = issues;
     this.parsedError = parsedError ?? createParsedApiError({
-      title: '配置校验失败',
+      title: 'Config Validation Failed',
       message,
       rawMessage: message,
       status: 400,
@@ -45,7 +47,7 @@ export class SystemConfigConflictError extends Error {
     this.name = 'SystemConfigConflictError';
     this.currentConfigVersion = currentConfigVersion;
     this.parsedError = parsedError ?? createParsedApiError({
-      title: '配置版本冲突',
+      title: 'Config Version Conflict',
       message,
       rawMessage: message,
       status: 409,
@@ -106,6 +108,16 @@ function toSnakeDiscoverModelsPayload(payload: DiscoverLLMChannelModelsRequest):
   };
 }
 
+function toSnakeUseOpenAICodexAuthPayload(payload: UseOpenAICodexAuthRequest): Record<string, unknown> {
+  return {
+    config_version: payload.configVersion,
+    mask_token: payload.maskToken ?? '******',
+    reasoning_model: payload.reasoningModel ?? 'openai/gpt-5.5',
+    data_model: payload.dataModel ?? '',
+    reload_now: payload.reloadNow ?? true,
+  };
+}
+
 export const systemConfigApi = {
   async getConfig(includeSchema = true): Promise<SystemConfigResponse> {
     const response = await apiClient.get<Record<string, unknown>>('/api/v1/system/config', {
@@ -158,6 +170,19 @@ export const systemConfigApi = {
     return toCamelCase<DiscoverLLMChannelModelsResponse>(response.data);
   },
 
+  async getOpenAICodexAuthStatus(): Promise<OpenAICodexAuthStatusResponse> {
+    const response = await apiClient.get<Record<string, unknown>>('/api/v1/system/config/openai-codex/status');
+    return toCamelCase<OpenAICodexAuthStatusResponse>(response.data);
+  },
+
+  async useOpenAICodexAuth(payload: UseOpenAICodexAuthRequest): Promise<UpdateSystemConfigResponse> {
+    const response = await apiClient.post<Record<string, unknown>>(
+      '/api/v1/system/config/openai-codex/use',
+      toSnakeUseOpenAICodexAuthPayload(payload),
+    );
+    return toCamelCase<UpdateSystemConfigResponse>(response.data);
+  },
+
   async update(payload: UpdateSystemConfigRequest): Promise<UpdateSystemConfigResponse> {
     try {
       const response = await apiClient.put<Record<string, unknown>>(
@@ -174,7 +199,7 @@ export const systemConfigApi = {
         if (status === 400) {
           const validationError = toCamelCase<SystemConfigValidationErrorResponse>(payloadData ?? {});
           throw new SystemConfigValidationError(
-            parsed.message || validationError.message || '配置校验失败',
+            parsed.message || validationError.message || 'Config validation failed',
             validationError.issues || [],
             parsed,
           );
@@ -183,7 +208,7 @@ export const systemConfigApi = {
         if (status === 409) {
           const conflict = toCamelCase<SystemConfigConflictResponse>(payloadData ?? {});
           throw new SystemConfigConflictError(
-            parsed.message || conflict.message || '配置版本冲突',
+            parsed.message || conflict.message || 'Config version conflict',
             conflict.currentConfigVersion,
             parsed,
           );

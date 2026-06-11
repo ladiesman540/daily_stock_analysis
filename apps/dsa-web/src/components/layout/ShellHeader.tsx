@@ -10,10 +10,15 @@ type ShellHeaderProps = {
 };
 
 const TITLES: Record<string, { title: string; description: string }> = {
-  '/': { title: '首页', description: '股票分析与历史报告工作台' },
-  '/chat': { title: '问股', description: '多轮策略问答与历史会话管理' },
-  '/backtest': { title: '回测', description: '回测任务与结果浏览' },
-  '/settings': { title: '设置', description: '系统配置、模型与认证管理' },
+  '/': { title: 'Home', description: 'Stock analysis and report history workspace' },
+  '/chat': { title: 'Chat', description: 'Strategy Q&A and session history' },
+  '/signals': { title: 'Signals', description: 'Ranked grinding leaders and checklist gates' },
+  '/data': { title: 'Free Data', description: 'Source coverage, macro, fundamentals, and short-volume inputs' },
+  '/rotation': { title: 'Rotation', description: 'Weekly sector and theme memo' },
+  '/sources': { title: 'Sources', description: 'X bookmarks, manual ideas, and source scores' },
+  '/portfolio': { title: 'Portfolio', description: 'Holdings, account snapshots, and risk' },
+  '/backtest': { title: 'Backtest', description: 'Backtest jobs and result review' },
+  '/settings': { title: 'Settings', description: 'System configuration, models, and auth' },
 };
 
 export const ShellHeader: React.FC<ShellHeaderProps> = ({
@@ -31,7 +36,7 @@ export const ShellHeader: React.FC<ShellHeaderProps> = ({
           type="button"
           onClick={onOpenMobileNav}
           className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-border/70 bg-card/70 text-secondary-text transition-colors hover:bg-hover hover:text-foreground lg:hidden"
-          aria-label="打开导航菜单"
+          aria-label="Open navigation menu"
         >
           <Menu className="h-5 w-5" />
         </button>
@@ -40,7 +45,7 @@ export const ShellHeader: React.FC<ShellHeaderProps> = ({
           type="button"
           onClick={onToggleSidebar}
           className="hidden h-10 w-10 items-center justify-center rounded-xl border border-border/70 bg-card/70 text-secondary-text transition-colors hover:bg-hover hover:text-foreground lg:inline-flex"
-          aria-label={collapsed ? '展开侧边栏' : '折叠侧边栏'}
+          aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           {collapsed ? <PanelLeftOpen className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
         </button>

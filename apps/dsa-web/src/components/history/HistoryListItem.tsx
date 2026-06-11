@@ -17,21 +17,37 @@ interface HistoryListItemProps {
 const getOperationBadgeLabel = (advice?: string) => {
   const normalized = advice?.trim();
   if (!normalized) {
-    return '情绪';
+    return 'Sentiment';
+  }
+  const lower = normalized.toLowerCase();
+  if (lower.includes('trim') || lower.includes('reduce')) {
+    return 'Trim';
+  }
+  if (lower.includes('sell')) {
+    return 'Sell';
+  }
+  if (lower.includes('watch') || lower.includes('wait') || lower.includes('hold')) {
+    return 'Watch';
+  }
+  if (lower.includes('buy') || lower.includes('accumulate')) {
+    return 'Buy';
   }
   if (normalized.includes('减仓')) {
-    return '减仓';
+    return 'Trim';
   }
   if (normalized.includes('卖')) {
-    return '卖出';
+    return 'Sell';
   }
   if (normalized.includes('观望') || normalized.includes('等待')) {
-    return '观望';
+    return 'Watch';
   }
   if (normalized.includes('买') || normalized.includes('布局')) {
-    return '买入';
+    return 'Buy';
   }
-  return normalized.split(/[，。；、\s]/)[0] || '建议';
+  if (/[\u3400-\u9fff]/.test(normalized)) {
+    return 'Advice';
+  }
+  return normalized.split(/[，。；、\s]/)[0] || 'Advice';
 };
 
 export const HistoryListItem: React.FC<HistoryListItemProps> = ({
@@ -47,69 +63,74 @@ export const HistoryListItem: React.FC<HistoryListItemProps> = ({
   const isTruncated = isStockNameTruncated(stockName);
 
   return (
-    <div className="flex items-start gap-2 group">
-      <div className="pt-5">
+    <div className="group flex items-start gap-2">
+      <div className="pt-4">
         <input
           type="checkbox"
           checked={isChecked}
           onChange={() => onToggleChecked(item.id)}
           disabled={isDeleting}
-          className="h-3.5 w-3.5 cursor-pointer rounded border-subtle-hover bg-transparent accent-primary focus:ring-primary/30 disabled:opacity-50"
+          className="h-3.5 w-3.5 cursor-pointer rounded border-border bg-card accent-primary focus:ring-primary/30 disabled:opacity-50"
         />
       </div>
       <button
         type="button"
         onClick={() => onClick(item.id)}
-        className={`home-history-item flex-1 text-left p-2.5 group/item ${
+        className={`home-history-item flex-1 text-left p-3 group/item ${
           isViewing ? 'home-history-item-selected' : ''
         }`}
       >
-        <div className={`flex items-center gap-2.5 relative z-10${isTruncated ? ' group-hover/item:z-20' : ''}`}>
+        <div className="relative z-10 flex items-start gap-2.5">
           {sentimentColor && (
             <div
-              className="w-1 h-8 rounded-full flex-shrink-0"
+              className="mt-0.5 h-10 w-1 rounded-full flex-shrink-0"
               style={{
                 backgroundColor: sentimentColor,
-                boxShadow: `0 0 10px ${sentimentColor}40`,
+                boxShadow: `0 0 0 3px ${sentimentColor}12`,
               }}
             />
           )}
           <div className="flex-1 min-w-0">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0 flex-1">
-                <span className="truncate text-sm font-semibold text-foreground tracking-tight">
-                  <span className="group-hover/item:hidden">
-                    {truncateStockName(stockName)}
-                  </span>
-                  <span className="hidden group-hover/item:inline">
-                    {stockName}
-                  </span>
-                </span>
-              </div>
+            <div className="flex min-w-0 items-start justify-between gap-2">
+              <span
+                title={isTruncated ? stockName : undefined}
+                className="block min-w-0 truncate text-sm font-semibold tracking-tight text-foreground"
+              >
+                {truncateStockName(stockName)}
+              </span>
               {sentimentColor && (
                 <Badge
                   variant="default"
                   size="sm"
-                  className={`home-history-sentiment-badge shrink-0 shadow-none text-[11px] font-semibold leading-none transition-opacity duration-200${isTruncated ? ' group-hover/item:opacity-80' : ''}`}
+                  className="home-history-sentiment-badge shrink-0 whitespace-nowrap shadow-none text-[10px] font-semibold leading-none"
                   style={{
                     color: sentimentColor,
-                    borderColor: `${sentimentColor}30`,
-                    backgroundColor: `${sentimentColor}10`,
+                    borderColor: `${sentimentColor}28`,
+                    backgroundColor: `${sentimentColor}0f`,
                   }}
                 >
-                  {getOperationBadgeLabel(item.operationAdvice)} {item.sentimentScore}
+                  {item.sentimentScore}
                 </Badge>
               )}
             </div>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="text-[11px] text-secondary-text font-mono">
+            <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-1.5">
+              <span className="rounded-md border border-border/70 bg-card px-1.5 py-0.5 font-mono text-[11px] text-secondary-text">
                 {item.stockCode}
               </span>
-              <span className="w-1 h-1 rounded-full bg-subtle-hover" />
-              <span className="text-[11px] text-muted-text">
+              <span className="min-w-0 text-[11px] text-muted-text">
                 {formatDateTime(item.createdAt)}
               </span>
             </div>
+            {sentimentColor ? (
+              <div className="mt-2 text-[11px] font-medium text-secondary-text">
+                {getOperationBadgeLabel(item.operationAdvice)}
+              </div>
+            ) : null}
+            {isTruncated ? (
+              <div className="mt-1 hidden rounded-md bg-card px-2 py-1 text-[11px] text-secondary-text shadow-soft-card group-hover/item:block">
+                {stockName}
+              </div>
+            ) : null}
           </div>
         </div>
       </button>

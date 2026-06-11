@@ -66,7 +66,7 @@ export function parseFollowUpRecordId(recordId: string | null): number | undefin
 
 export function buildFollowUpPrompt(stockCode: string, stockName: string | null): string {
   const displayName = stockName ? `${stockName}(${stockCode})` : stockCode;
-  return `请深入分析 ${displayName}`;
+  return `Take a deeper look at ${displayName}`;
 }
 
 export function buildChatFollowUpContext(

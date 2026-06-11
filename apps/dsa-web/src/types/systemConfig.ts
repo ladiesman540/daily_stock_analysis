@@ -103,6 +103,29 @@ export interface UpdateSystemConfigResponse {
   warnings: string[];
 }
 
+export interface OpenAICodexAuthStatusResponse {
+  enabled: boolean;
+  recommendedModel: string;
+  authPath: string;
+  cliPath: string;
+  authFileExists: boolean;
+  authMode: string;
+  accountId: string;
+  loggedIn: boolean;
+  tokenPresent: boolean;
+  tokenExpiresAt?: number | null;
+  tokenExpired: boolean;
+  statusMessage: string;
+}
+
+export interface UseOpenAICodexAuthRequest {
+  configVersion: string;
+  maskToken?: string;
+  reasoningModel?: string;
+  dataModel?: string;
+  reloadNow?: boolean;
+}
+
 export interface ValidateSystemConfigRequest {
   items: SystemConfigUpdateItem[];
 }

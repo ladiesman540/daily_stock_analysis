@@ -48,10 +48,13 @@ interface AgentChatState {
   completionBadge: boolean;
   hasInitialLoad: boolean;
   abortController: AbortController | null;
+  /** Prompt staged by another page (e.g. Today) for ChatPage to pick up as input. */
+  pendingPrompt: string | null;
 }
 
 interface AgentChatActions {
   setCurrentRoute: (path: string) => void;
+  setPendingPrompt: (prompt: string | null) => void;
   clearCompletionBadge: () => void;
   loadSessions: () => Promise<void>;
   loadInitialSession: () => Promise<void>;
@@ -77,8 +80,11 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
   completionBadge: false,
   hasInitialLoad: false,
   abortController: null,
+  pendingPrompt: null,
 
   setCurrentRoute: (path) => set({ currentRoute: path }),
+
+  setPendingPrompt: (prompt) => set({ pendingPrompt: prompt }),
 
   clearCompletionBadge: () => set({ completionBadge: false }),
 
@@ -180,7 +186,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
     set({ abortController: ac });
 
     const streamSessionId = payload.session_id || storeSessionId;
-    const skillName = meta?.skillName ?? '通用';
+    const skillName = meta?.skillName ?? 'General';
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -231,10 +237,10 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
             const parsedStreamError = getParsedApiError(
               doneEvent.error ||
                 doneEvent.content ||
-                '大模型调用出错，请检查 API Key 配置',
+                'Model call failed. Check your API key configuration.',
             );
             throw createParsedApiError({
-              title: '问股执行失败',
+              title: 'Chat Execution Failed',
               message: parsedStreamError.message,
               rawMessage: parsedStreamError.rawMessage,
               status: parsedStreamError.status,
@@ -246,7 +252,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
         }
 
         if (event.type === 'error') {
-          throw getParsedApiError(event.message || '分析出错');
+          throw getParsedApiError(event.message || 'Analysis failed');
         }
 
         currentProgressSteps.push(event);
@@ -292,7 +298,7 @@ export const useAgentChatStore = create<AgentChatState & AgentChatActions>((set,
             {
               id: (Date.now() + 1).toString(),
               role: 'assistant',
-              content: finalContent || '（无内容）',
+              content: finalContent || '(No content)',
               skill: payload.skills?.[0],
               skillName,
               thinkingSteps: [...currentProgressSteps],

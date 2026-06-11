@@ -1,5 +1,17 @@
 import type { Message } from '../stores/agentChatStore';
 
+const containsHanText = (value?: string | null): boolean =>
+  /[\u3400-\u9fff]/.test(value || '');
+
+const visibleMessageContent = (msg: Message): string => {
+  if (!containsHanText(msg.content)) {
+    return msg.content;
+  }
+  return msg.role === 'assistant'
+    ? 'This older reply was generated before English mode and has been hidden. Ask again and the agent will answer in English.'
+    : '[Non-English message hidden]';
+};
+
 /**
  * Format chat messages as Markdown for export.
  */
@@ -14,21 +26,21 @@ export function formatSessionAsMarkdown(messages: Message[]): string {
   });
 
   const lines: string[] = [
-    '# 问股会话',
+    '# Chat Session',
     '',
-    `生成时间: ${timeStr}`,
+    `Generated at: ${timeStr}`,
     '',
   ];
 
   for (const msg of messages) {
-    const heading = msg.role === 'user' ? '## 用户' : '## AI';
+    const heading = msg.role === 'user' ? '## User' : '## AI';
     if (msg.role === 'assistant' && msg.skillName) {
       lines.push(`${heading} (${msg.skillName})`);
     } else {
       lines.push(heading);
     }
     lines.push('');
-    lines.push(msg.content);
+    lines.push(visibleMessageContent(msg));
     lines.push('');
   }
 
@@ -46,7 +58,7 @@ export function downloadSession(messages: Message[]): void {
   const dateStr = now.toISOString().slice(0, 10).replace(/-/g, '');
   const pad = (n: number) => n.toString().padStart(2, '0');
   const timeStr = pad(now.getHours()) + pad(now.getMinutes());
-  const filename = `问股会话_${dateStr}_${timeStr}.md`;
+  const filename = `chat-session_${dateStr}_${timeStr}.md`;
 
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

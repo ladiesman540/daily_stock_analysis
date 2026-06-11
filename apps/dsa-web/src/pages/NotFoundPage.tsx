@@ -7,7 +7,7 @@ const NotFoundPage: React.FC = () => {
 
   // Set page title
   useEffect(() => {
-    document.title = '页面未找到 - DSA';
+    document.title = 'Page Not Found - DSA';
   }, []);
 
   return (
@@ -17,15 +17,15 @@ const NotFoundPage: React.FC = () => {
         <span 
           className="text-8xl font-bold text-transparent bg-clip-text"
           style={{
-            backgroundImage: 'linear-gradient(135deg, #00d4ff 0%, #a855f7 100%)',
+            backgroundImage: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
           }}
         >
           404
         </span>
       </div>
 
-      <h1 className="text-2xl font-bold text-foreground mb-2">页面未找到</h1>
-      <p className="text-muted-text mb-8">抱歉，您访问的页面不存在或已被移动</p>
+      <h1 className="text-2xl font-bold text-foreground mb-2">Page Not Found</h1>
+      <p className="text-muted-text mb-8">The page you opened does not exist or has moved.</p>
 
       <button 
         type="button"
@@ -35,7 +35,7 @@ const NotFoundPage: React.FC = () => {
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
         </svg>
-        返回首页
+        Back Home
       </button>
     </div>
   );

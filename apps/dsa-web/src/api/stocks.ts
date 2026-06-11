@@ -1,4 +1,5 @@
 import apiClient from './index';
+import { toCamelCase } from './utils';
 
 export type ExtractItem = {
   code?: string | null;
@@ -12,7 +13,60 @@ export type ExtractFromImageResponse = {
   rawText?: string;
 };
 
+export type StockQuote = {
+  stockCode: string;
+  stockName?: string | null;
+  currentPrice: number;
+  change?: number | null;
+  changePercent?: number | null;
+  open?: number | null;
+  high?: number | null;
+  low?: number | null;
+  prevClose?: number | null;
+  volume?: number | null;
+  amount?: number | null;
+  source?: string | null;
+  updateTime?: string | null;
+};
+
+export type KLinePoint = {
+  date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume?: number | null;
+  amount?: number | null;
+  changePercent?: number | null;
+};
+
+export type StockHistoryResponse = {
+  stockCode: string;
+  stockName?: string | null;
+  period: string;
+  data: KLinePoint[];
+};
+
 export const stocksApi = {
+  async getQuote(stockCode: string): Promise<StockQuote> {
+    const response = await apiClient.get<Record<string, unknown>>(
+      `/api/v1/stocks/${encodeURIComponent(stockCode)}/quote`,
+    );
+    return toCamelCase<StockQuote>(response.data);
+  },
+
+  /** Daily K-line history from GET /api/v1/stocks/{code}/history (days capped at 365 server-side). */
+  async getHistory(
+    stockCode: string,
+    params: { period?: 'daily' | 'weekly' | 'monthly'; days?: number } = {},
+  ): Promise<StockHistoryResponse> {
+    const response = await apiClient.get<Record<string, unknown>>(
+      `/api/v1/stocks/${encodeURIComponent(stockCode)}/history`,
+      { params: { period: params.period ?? 'daily', days: params.days ?? 90 } },
+    );
+    return toCamelCase<StockHistoryResponse>(response.data);
+  },
+
   async extractFromImage(file: File): Promise<ExtractFromImageResponse> {
     const formData = new FormData();
     formData.append('file', file);
@@ -49,6 +103,6 @@ export const stocksApi = {
       const data = response.data as { codes?: string[]; items?: ExtractItem[] };
       return { codes: data.codes ?? [], items: data.items };
     }
-    throw new Error('请提供文件或粘贴文本');
+    throw new Error('Provide a file or pasted text');
   },
 };

@@ -5,6 +5,7 @@ import type {
   ReportSummary as ReportSummaryType,
 } from '../../types/analysis';
 import { Badge, Card, ScoreGauge } from '../common';
+import { isUsableLiveQuote, useLiveStockQuote } from '../../hooks/useLiveStockQuote';
 import { formatDateTime } from '../../utils/format';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
 
@@ -80,6 +81,9 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
 }) => {
   const reportLanguage = normalizeReportLanguage(meta.reportLanguage);
   const text = getReportText(reportLanguage);
+  const liveQuoteState = useLiveStockQuote(meta.stockCode);
+  const liveQuote = isUsableLiveQuote(liveQuoteState.quote) ? liveQuoteState.quote : null;
+  const liveChangePct = coerceFiniteNumber(liveQuote?.changePercent);
   const relatedBoards = (Array.isArray(details?.belongBoards) ? details.belongBoards : [])
     .filter((board) => normalizeBoardName(board?.name).length > 0)
     .slice(0, 3);
@@ -100,11 +104,31 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
 
     return undefined;
   };
+  const livePriceStyle = getPriceChangeStyle(liveChangePct);
 
   const formatChangePct = (changePct: number | undefined): string => {
     if (changePct === undefined || changePct === null) return '--';
     const sign = changePct > 0 ? '+' : '';
     return `${sign}${changePct.toFixed(2)}%`;
+  };
+
+  const formatPrice = (price: number): string => new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: price < 10 ? 4 : 2,
+  }).format(price);
+
+  const formatQuoteSource = (source?: string | null): string => {
+    if (!source) return 'Market data';
+    const normalizedSource = source.toLowerCase();
+    if (normalizedSource === 'fallback') return 'Yahoo Finance';
+    if (normalizedSource === 'stooq') return 'Stooq';
+    if (normalizedSource === 'longbridge') return 'Longbridge';
+    if (normalizedSource === 'efinance') return 'Eastmoney';
+    if (normalizedSource.includes('akshare')) return 'AkShare';
+    if (normalizedSource === 'tencent') return 'Tencent';
+    if (normalizedSource === 'sina') return 'Sina';
+    if (normalizedSource === 'tushare') return 'Tushare';
+    return source;
   };
 
   const getBoardStatusLabel = (status: BoardStatus): string => {
@@ -124,30 +148,44 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
   return (
     <div className="space-y-5">
       {/* 主信息区 - 两列布局，items-stretch 确保右侧与左侧同高 */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-stretch">
+      <div className="grid grid-cols-1 items-stretch gap-5 2xl:grid-cols-[minmax(0,1fr)_320px]">
         {/* 左侧：股票信息与结论 */}
-        <div className="lg:col-span-2 space-y-5">
+        <div className="min-w-0 space-y-5">
           {/* 股票头部 */}
           <Card variant="gradient" padding="md" className="home-report-hero">
-            <div className="flex items-start justify-between mb-5">
-              <div className="flex-1">
-                <div className="flex items-center gap-3">
-                  <h2 className="text-[28px] font-bold leading-tight text-foreground">
+            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 flex-col gap-3">
+                  <h2 className="min-w-0 break-words text-[26px] font-bold leading-tight tracking-tight text-foreground md:text-[30px]">
                     {meta.stockName || meta.stockCode}
                   </h2>
-                  {/* 价格和涨跌幅 */}
-                  {meta.currentPrice != null && (
-                    <div className="flex items-baseline gap-2">
-                      <span className="text-xl font-bold font-mono" style={getPriceChangeStyle(meta.changePct)}>
-                        {meta.currentPrice.toFixed(2)}
-                      </span>
-                      <span className="text-sm font-semibold font-mono" style={getPriceChangeStyle(meta.changePct)}>
-                        {formatChangePct(meta.changePct)}
-                      </span>
-                    </div>
-                  )}
+                  <div className="w-fit max-w-full shrink-0" aria-live="polite">
+                    {liveQuote ? (
+                      <div className="rounded-xl border border-border/70 bg-card px-3 py-2 shadow-sm">
+                        <div className="mb-1 flex items-center gap-2 text-[10px] font-semibold uppercase text-muted-text">
+                          <span className="h-1.5 w-1.5 rounded-full bg-success shadow-[0_0_0_4px_hsl(var(--success)/0.12)]" />
+                          <span>Latest quote</span>
+                          <span className="text-border">/</span>
+                          <span>{formatQuoteSource(liveQuote.source)}</span>
+                        </div>
+                        <div className="flex items-baseline gap-2">
+                          <span className="font-mono text-xl font-bold" style={livePriceStyle}>
+                            {formatPrice(liveQuote.currentPrice)}
+                          </span>
+                          <span className="font-mono text-sm font-semibold" style={livePriceStyle}>
+                            {formatChangePct(liveChangePct)}
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 rounded-xl border border-border/70 bg-card px-3 py-2 text-xs font-medium text-muted-text shadow-sm">
+                        <span className={`h-1.5 w-1.5 rounded-full ${liveQuoteState.isLoading ? 'animate-pulse bg-primary' : 'bg-muted-text/60'}`} />
+                        {liveQuoteState.isLoading ? 'Loading latest quote' : 'Latest price unavailable'}
+                      </div>
+                    )}
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 mt-1.5">
+                <div className="mt-2 flex flex-wrap items-center gap-2">
                   <span className="home-accent-chip px-2 py-0.5 font-mono text-xs">
                     {meta.stockCode}
                   </span>
@@ -155,7 +193,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
                     </svg>
-                    {formatDateTime(meta.createdAt)}
+                    Report generated {formatDateTime(meta.createdAt)}
                   </span>
                 </div>
               </div>
@@ -164,7 +202,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
             {/* 关键结论 */}
             <div className="home-divider border-t pt-5">
               <span className="label-uppercase">{text.keyInsights}</span>
-              <p className="mt-2 max-w-[62ch] whitespace-pre-wrap text-left text-[15px] leading-7 text-foreground">
+              <p className="mt-3 max-w-[72ch] whitespace-pre-wrap text-left text-[15px] leading-7 text-foreground">
                 {summary.analysisSummary || text.noAnalysisSummary}
               </p>
             </div>
@@ -268,7 +306,7 @@ export const ReportOverview: React.FC<ReportOverviewProps> = ({
         </div>
 
         {/* 右侧：情绪指标 - 填满格子高度，消除与 STRATEGY POINTS 之间的空隙 */}
-        <div className="flex flex-col self-stretch min-h-full">
+        <div className="flex min-h-full flex-col self-stretch">
           <Card variant="bordered" padding="md" className="home-panel-card home-rail-card !overflow-visible flex-1 flex flex-col min-h-0">
             <div className="text-center flex-1 flex flex-col justify-center">
               <h3 className="mb-5 text-sm font-medium tracking-wide text-foreground">{text.marketSentiment}</h3>

@@ -10,10 +10,10 @@ interface HistoryListProps {
   isLoading: boolean;
   isLoadingMore: boolean;
   hasMore: boolean;
-  selectedId?: number;  // 当前选中的历史记录 ID
+  selectedId?: number;  // Currently selected history record ID
   selectedIds: Set<number>;
   isDeleting?: boolean;
-  onItemClick: (recordId: number) => void;  // 点击记录的回调
+  onItemClick: (recordId: number) => void;  // Record click callback
   onLoadMore: () => void;
   onToggleItemSelection: (recordId: number) => void;
   onToggleSelectAll: () => void;
@@ -22,8 +22,7 @@ interface HistoryListProps {
 }
 
 /**
- * 历史记录列表组件 (升级版)
- * 使用新设计系统组件实现，支持批量选择和滚动加载
+ * History list with bulk selection and infinite loading.
  */
 export const HistoryList: React.FC<HistoryListProps> = ({
   items,
@@ -49,7 +48,7 @@ export const HistoryList: React.FC<HistoryListProps> = ({
   const allVisibleSelected = items.length > 0 && selectedCount === items.length;
   const someVisibleSelected = selectedCount > 0 && !allVisibleSelected;
 
-  // 使用 IntersectionObserver 检测滚动到底部
+  // Detect when the scroll area reaches the bottom.
   const handleObserver = useCallback(
     (entries: IntersectionObserverEntry[]) => {
       const target = entries[0];
@@ -85,17 +84,17 @@ export const HistoryList: React.FC<HistoryListProps> = ({
   }, [someVisibleSelected]);
 
   return (
-    <aside className={`glass-card overflow-hidden flex flex-col ${className}`}>
+    <aside className={`home-history-panel overflow-hidden flex flex-col ${className}`}>
       <ScrollArea
         viewportRef={scrollContainerRef}
-        viewportClassName="p-4"
+        viewportClassName="p-3.5"
         testId="home-history-list-scroll"
       >
-        <div className="mb-4 space-y-3">
+        <div className="mb-3 space-y-3">
           <DashboardPanelHeader
             className="mb-1"
-            title="历史分析"
-            titleClassName="text-sm font-medium"
+            title="History"
+            titleClassName="text-sm font-semibold"
             leading={(
               <svg className="h-4 w-4 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -105,14 +104,14 @@ export const HistoryList: React.FC<HistoryListProps> = ({
             actions={
               selectedCount > 0 ? (
                 <Badge variant="info" size="sm" className="history-selection-badge animate-in fade-in zoom-in duration-200">
-                  已选 {selectedCount}
+                  {selectedCount} selected
                 </Badge>
               ) : undefined
             }
           />
 
           {items.length > 0 && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 rounded-xl border border-border/70 bg-card px-2 py-1.5">
               <label
                 className="flex flex-1 cursor-pointer items-center gap-2 rounded-lg px-2 py-1"
                 htmlFor={selectAllId}
@@ -124,10 +123,10 @@ export const HistoryList: React.FC<HistoryListProps> = ({
                   checked={allVisibleSelected}
                   onChange={onToggleSelectAll}
                   disabled={isDeleting}
-                  aria-label="全选当前已加载历史记录"
+                  aria-label="Select all loaded history records"
                   className="history-select-all-checkbox h-3.5 w-3.5 cursor-pointer bg-transparent accent-primary focus:ring-primary/30 disabled:opacity-50"
                 />
-                <span className="text-[11px] text-muted-text select-none">全选当前</span>
+                <span className="text-[11px] text-muted-text select-none">Select visible</span>
               </label>
               <Button
                 variant="danger-subtle"
@@ -137,7 +136,7 @@ export const HistoryList: React.FC<HistoryListProps> = ({
                 isLoading={isDeleting}
                 className="history-batch-delete-button disabled:!border-transparent disabled:!bg-transparent"
               >
-                {isDeleting ? '删除中' : '删除'}
+                {isDeleting ? 'Deleting' : 'Delete'}
               </Button>
             </div>
           )}
@@ -147,12 +146,12 @@ export const HistoryList: React.FC<HistoryListProps> = ({
           <DashboardStateBlock
             loading
             compact
-            title="加载历史记录中..."
+            title="Loading history..."
           />
         ) : items.length === 0 ? (
           <DashboardStateBlock
-            title="暂无历史分析记录"
-            description="完成首次分析后，这里会保留最近结果。"
+            title="No historical reports"
+            description="After your first analysis, recent results will appear here."
             icon={(
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -184,7 +183,7 @@ export const HistoryList: React.FC<HistoryListProps> = ({
             {!hasMore && items.length > 0 && (
               <div className="text-center py-5">
                 <div className="h-px bg-subtle w-full mb-3" />
-                <span className="text-[10px] text-secondary-text uppercase tracking-[0.2em]">已到底部</span>
+                <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-text">End</span>
               </div>
             )}
           </div>

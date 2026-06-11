@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion } from 'motion/react';
-import { BarChart3, BriefcaseBusiness, Home, LogOut, MessageSquareQuote, Settings2 } from 'lucide-react';
+import { BarChart3, BookOpenCheck, BriefcaseBusiness, Crosshair, DatabaseZap, LogOut, MessageSquareQuote, Newspaper, Search, Settings2, Sunrise, TrendingUp, Users } from 'lucide-react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useAgentChatStore } from '../../stores/agentChatStore';
@@ -24,11 +24,18 @@ type NavItem = {
 };
 
 const NAV_ITEMS: NavItem[] = [
-  { key: 'home', label: '首页', to: '/', icon: Home, exact: true },
-  { key: 'chat', label: '问股', to: '/chat', icon: MessageSquareQuote, badge: 'completion' },
-  { key: 'portfolio', label: '持仓', to: '/portfolio', icon: BriefcaseBusiness },
-  { key: 'backtest', label: '回测', to: '/backtest', icon: BarChart3 },
-  { key: 'settings', label: '设置', to: '/settings', icon: Settings2 },
+  { key: 'today', label: 'Today', to: '/', icon: Sunrise, exact: true },
+  { key: 'analyze', label: 'Analyze', to: '/analyze', icon: Search },
+  { key: 'guide', label: 'Guide', to: '/guide', icon: BookOpenCheck },
+  { key: 'chat', label: 'Chat', to: '/chat', icon: MessageSquareQuote, badge: 'completion' },
+  { key: 'signals', label: 'Signals', to: '/signals', icon: TrendingUp },
+  { key: 'data', label: 'Data', to: '/data', icon: DatabaseZap },
+  { key: 'rotation', label: 'Rotation', to: '/rotation', icon: Newspaper },
+  { key: 'positioning', label: 'Positioning', to: '/positioning', icon: Crosshair },
+  { key: 'sources', label: 'Sources', to: '/sources', icon: Users },
+  { key: 'portfolio', label: 'Portfolio', to: '/portfolio', icon: BriefcaseBusiness },
+  { key: 'backtest', label: 'Backtest', to: '/backtest', icon: BarChart3 },
+  { key: 'settings', label: 'Settings', to: '/settings', icon: Settings2 },
 ];
 
 export const SidebarNav: React.FC<SidebarNavProps> = ({ collapsed = false, onNavigate }) => {
@@ -38,16 +45,19 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({ collapsed = false, onNav
 
   return (
     <div className="flex h-full flex-col">
-      <div className={cn('mb-4 flex items-center gap-2 px-1', collapsed ? 'justify-center' : '')}>
-        <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-primary-gradient text-[hsl(var(--primary-foreground))] shadow-[0_12px_28px_var(--nav-brand-shadow)]">
+      <div className={cn('mb-5 flex items-center gap-3 px-1', collapsed ? 'justify-center' : '')}>
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-gradient text-[hsl(var(--primary-foreground))] shadow-[0_10px_22px_var(--nav-brand-shadow)]">
           <BarChart3 className="h-5 w-5" />
         </div>
         {!collapsed ? (
-          <p className="min-w-0 truncate text-sm font-semibold text-foreground">DSA</p>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-foreground">DSA</p>
+            <p className="truncate text-[11px] text-secondary-text">Signal workspace</p>
+          </div>
         ) : null}
       </div>
 
-      <nav className="flex flex-1 flex-col gap-1.5" aria-label="主导航">
+      <nav className="flex flex-1 flex-col gap-1.5" aria-label="Primary navigation">
         {NAV_ITEMS.map(({ key, label, to, icon: Icon, exact, badge }) => (
           <NavLink
             key={key}
@@ -57,12 +67,12 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({ collapsed = false, onNav
             aria-label={label}
             className={({ isActive }) =>
               cn(
-                'group relative flex items-center gap-3 border-y border-x-0 text-sm transition-all',
+                'group relative flex items-center gap-2.5 rounded-xl border text-sm transition-all',
                 'h-[var(--nav-item-height)]',
-                collapsed ? 'justify-center px-0' : 'px-[var(--nav-item-padding-x)]',
+                collapsed ? 'justify-center px-0' : 'px-3',
                 isActive
-                  ? 'border-[var(--nav-active-border)] bg-[var(--nav-active-bg)] text-[hsl(var(--primary))] font-medium'
-                  : 'border-transparent text-secondary-text hover:bg-[var(--nav-hover-bg)] hover:text-foreground'
+                  ? 'border-[var(--nav-active-border)] bg-[var(--nav-active-bg)] text-[hsl(var(--primary))] font-semibold shadow-[0_8px_20px_var(--nav-active-shadow)]'
+                  : 'border-transparent text-secondary-text hover:border-border/80 hover:bg-[var(--nav-hover-bg)] hover:text-foreground'
               )
             }
           >
@@ -71,13 +81,13 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({ collapsed = false, onNav
                 {isActive && (
                   <motion.div 
                     layoutId="activeIndicator"
-                    className="absolute top-0 bottom-0 left-0 w-[var(--nav-indicator-width)] bg-[var(--nav-indicator-bg)] shadow-[0_0_10px_var(--nav-indicator-shadow)]"
+                    className="absolute bottom-2 left-1 top-2 w-[var(--nav-indicator-width)] rounded-full bg-[var(--nav-indicator-bg)]"
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     transition={{ duration: 0.2 }}
                   />
                 )}
-                <Icon className={cn('ml-1 h-5 w-5 shrink-0', isActive ? 'text-[var(--nav-icon-active)]' : 'text-current')} />
+                <Icon className={cn('h-5 w-5 shrink-0', isActive ? 'text-[var(--nav-icon-active)]' : 'text-current')} />
                 {!collapsed ? <span className="truncate">{label}</span> : null}
                 {badge === 'completion' && completionBadge ? (
                   <StatusDot
@@ -87,7 +97,7 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({ collapsed = false, onNav
                       'absolute right-3 border-2 border-background shadow-[0_0_10px_var(--nav-indicator-shadow)]',
                       collapsed ? 'right-2 top-2' : ''
                     )}
-                    aria-label="问股有新消息"
+                    aria-label="Chat has a new message"
                   />
                 ) : null}
               </>
@@ -105,21 +115,21 @@ export const SidebarNav: React.FC<SidebarNavProps> = ({ collapsed = false, onNav
           type="button"
           onClick={() => setShowLogoutConfirm(true)}
           className={cn(
-            'mt-5 flex h-11 w-full cursor-pointer select-none items-center gap-3 rounded-2xl border border-transparent px-3 text-sm text-secondary-text transition-all hover:border-border/70 hover:bg-hover hover:text-foreground',
+            'mt-5 flex h-11 w-full cursor-pointer select-none items-center gap-3 rounded-xl border border-transparent px-3 text-sm text-secondary-text transition-all hover:border-border/80 hover:bg-hover hover:text-foreground',
             collapsed ? 'justify-center px-2' : ''
           )}
         >
           <LogOut className="h-5 w-5 shrink-0" />
-          {!collapsed ? <span>退出</span> : null}
+          {!collapsed ? <span>Log out</span> : null}
         </button>
       ) : null}
 
       <ConfirmDialog
         isOpen={showLogoutConfirm}
-        title="退出登录"
-        message="确认退出当前登录状态吗？退出后需要重新输入密码。"
-        confirmText="确认退出"
-        cancelText="取消"
+        title="Log out"
+        message="Log out of the current session? You will need to enter the password again."
+        confirmText="Log out"
+        cancelText="Cancel"
         isDanger
         onConfirm={() => {
           setShowLogoutConfirm(false);

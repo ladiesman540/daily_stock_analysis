@@ -96,7 +96,7 @@ export const Drawer: React.FC<DrawerProps> = ({
               type="button"
               onClick={onClose}
               className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-border/70 bg-card/80 text-secondary-text transition-colors hover:bg-hover hover:text-foreground"
-              aria-label="关闭抽屉"
+              aria-label="Close drawer"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
