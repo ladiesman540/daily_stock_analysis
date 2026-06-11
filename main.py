@@ -703,61 +703,72 @@ def _build_schedule_time_provider(default_schedule_time: str):
     return _provider
 
 
-# First-boot bootstrap: steps skipped in the one-time snapshot on a fresh DB
-# (no per-stock LLM analysis, no notifications).
-_BOOTSTRAP_EXCLUDED_STEPS = ("analysis", "notify")
+# Routine snapshot pipeline (scripts/daily_snapshot.py) scheduling for
+# in-process deployments (Railway/Docker, where launchd doesn't exist).
+# A fresh DB (no rotation snapshot ever) is always due; otherwise the
+# pipeline is due once per US session after SNAPSHOT_SCHEDULE_TIME local.
+_SNAPSHOT_SCHEDULE_TIME_DEFAULT = "15:10"
 
 
-def _needs_bootstrap_snapshot() -> bool:
-    """True when the DB has neither a rotation snapshot nor a market-regime row."""
+def _snapshot_schedule_time() -> "datetime_time":
+    from datetime import time as datetime_time
+
+    raw = (os.getenv("SNAPSHOT_SCHEDULE_TIME") or _SNAPSHOT_SCHEDULE_TIME_DEFAULT).strip()
+    try:
+        hour, minute = raw.split(":")
+        return datetime_time(int(hour), int(minute))
+    except Exception:
+        logger.warning("无效的 SNAPSHOT_SCHEDULE_TIME=%r，使用默认 %s", raw, _SNAPSHOT_SCHEDULE_TIME_DEFAULT)
+        hour, minute = _SNAPSHOT_SCHEDULE_TIME_DEFAULT.split(":")
+        return datetime_time(int(hour), int(minute))
+
+
+def _snapshot_pipeline_due() -> bool:
+    """True when the routine snapshot should run now. Fail-open to False."""
+    from datetime import datetime as dt
+
     from src.storage import DatabaseManager
 
     db = DatabaseManager.get_instance()
-    if db.get_latest_sector_rotation_snapshot() is not None:
+    latest = db.get_latest_sector_rotation_snapshot()
+    if latest is None:
+        return True  # fresh database: bootstrap immediately
+    now = dt.now()
+    if now.time() < _snapshot_schedule_time():
         return False
-    if db.get_latest_market_regime_snapshot() is not None:
-        return False
-    return True
-
-
-def _run_bootstrap_snapshot(delay_seconds: float = 45.0) -> None:
-    """Run the one-time first-boot snapshot steps. Entirely fail-open."""
     try:
-        if delay_seconds > 0:
-            time.sleep(delay_seconds)  # let uvicorn settle before heavy work
-        from scripts.daily_snapshot import ALL_STEPS, STEP_RUNNERS
+        from src.services.research_market_data import _latest_expected_us_bar_date
 
-        steps = [step for step in ALL_STEPS if step not in _BOOTSTRAP_EXCLUDED_STEPS]
-        context: dict = {"send_digest": False}
-        for step in steps:
-            try:
-                result = STEP_RUNNERS[step](context)
-                logger.info("Bootstrap snapshot step %s ok: %s", step, result)
-            except Exception as exc:
-                logger.warning("Bootstrap snapshot step %s failed (continuing): %s", step, exc)
-        logger.info("Bootstrap snapshot finished")
-    except Exception as exc:
-        logger.warning("Bootstrap snapshot aborted: %s", exc)
+        expected = _latest_expected_us_bar_date()
+    except Exception:
+        expected = now.date()
+    as_of = str(latest.get("as_of") or "")
+    return bool(expected) and as_of < str(expected)
 
 
-def _maybe_start_bootstrap_snapshot() -> None:
-    """Spawn the one-time bootstrap thread when the DB is fresh. Fail-open."""
+def _run_snapshot_pipeline() -> None:
+    """Run all routine snapshot steps in order. Per-step fail-open."""
+    from scripts.daily_snapshot import ALL_STEPS, STEP_RUNNERS
+
+    context: dict = {}
+    for step in ALL_STEPS:
+        try:
+            result = STEP_RUNNERS[step](context)
+            logger.info("Snapshot step %s ok: %s", step, result)
+        except Exception as exc:
+            logger.warning("Snapshot step %s failed (continuing): %s", step, exc)
+    logger.info("Snapshot pipeline finished")
+
+
+def _snapshot_pipeline_task() -> None:
+    """Background-task wrapper: run the pipeline only when due. Fail-open."""
     try:
-        if not _needs_bootstrap_snapshot():
+        if not _snapshot_pipeline_due():
             return
-        logger.info(
-            "Fresh database detected — running one-time bootstrap snapshot (excluding: %s)",
-            ", ".join(_BOOTSTRAP_EXCLUDED_STEPS),
-        )
-        import threading
-
-        threading.Thread(
-            target=_run_bootstrap_snapshot,
-            name="bootstrap_snapshot",
-            daemon=True,
-        ).start()
+        logger.info("Routine snapshot pipeline due — running now")
+        _run_snapshot_pipeline()
     except Exception as exc:
-        logger.warning("Bootstrap snapshot check failed (skipped): %s", exc)
+        logger.warning("Routine snapshot pipeline aborted: %s", exc)
 
 
 def main() -> int:
@@ -988,10 +999,16 @@ def main() -> int:
                 else:
                     logger.info("EventMonitor 已启用，但未加载到有效规则，跳过后台提醒任务")
 
-            # 全新空库首次启动：在 Web 服务可用后异步执行一次性引导快照，
-            # 让页面在首个定时任务前就有数据（跳过 analysis/notify，完全 fail-open）。
+            # 例行快照管道（轮换/周期/发现/新闻等）：进程内定时执行，覆盖
+            # 无 launchd 的容器部署。空库立即引导；其余每个交易日跑一次
+            # （SNAPSHOT_SCHEDULE_TIME，默认 15:10 本地时间），完全 fail-open。
             if start_serve:
-                _maybe_start_bootstrap_snapshot()
+                background_tasks.append({
+                    "task": _snapshot_pipeline_task,
+                    "interval_seconds": 1800,
+                    "run_immediately": True,
+                    "name": "snapshot_pipeline",
+                })
 
             run_with_schedule(
                 task=scheduled_task,
