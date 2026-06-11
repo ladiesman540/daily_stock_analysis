@@ -2399,12 +2399,20 @@ class DatabaseManager:
             context['yesterday'] = yesterday_data.to_dict()
             
             # 计算相比昨日的变化
-            if yesterday_data.volume and yesterday_data.volume > 0:
+            # 缓存的当日 bar 可能尚无成交/收盘数据（盘中写入的美股行情），
+            # 任一端为 None 时跳过对应比值。
+            if (
+                yesterday_data.volume and yesterday_data.volume > 0
+                and today_data.volume is not None
+            ):
                 context['volume_change_ratio'] = round(
                     today_data.volume / yesterday_data.volume, 2
                 )
-            
-            if yesterday_data.close and yesterday_data.close > 0:
+
+            if (
+                yesterday_data.close and yesterday_data.close > 0
+                and today_data.close is not None
+            ):
                 context['price_change_ratio'] = round(
                     (today_data.close - yesterday_data.close) / yesterday_data.close * 100, 2
                 )

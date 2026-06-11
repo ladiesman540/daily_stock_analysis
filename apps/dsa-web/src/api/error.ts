@@ -130,8 +130,10 @@ function includesAny(haystack: string, needles: string[]): boolean {
 }
 
 function hideNonEnglishText(value: string): string {
+  // Show untranslated backend errors rather than hiding them \u2014 a masked
+  // error is undiagnosable. The prefix marks it as raw backend output.
   return /[\u3400-\u9fff]/.test(value)
-    ? 'The backend returned a non-English error. Details are hidden in English mode.'
+    ? `Backend error (untranslated): ${value}`
     : value;
 }
 
