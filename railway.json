@@ -5,7 +5,7 @@
     "dockerfilePath": "docker/Dockerfile"
   },
   "deploy": {
-    "startCommand": "python main.py --schedule --serve --host 0.0.0.0 --port $PORT",
+    "startCommand": "python main.py --schedule --serve --host 0.0.0.0 --port 8000",
     "healthcheckPath": "/api/health",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",
