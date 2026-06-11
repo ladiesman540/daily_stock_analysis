@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.dsa.serve</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/Uzi/Appz/finance-repos/daily_stock_analysis</string>
+
+    <!-- Keep the dashboard web UI running across reboots. -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/Uzi/Appz/finance-repos/daily_stock_analysis/.venv312/bin/python</string>
+        <string>main.py</string>
+        <string>--serve-only</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/Uzi/Appz/finance-repos/daily_stock_analysis/logs/launchd_serve.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/Uzi/Appz/finance-repos/daily_stock_analysis/logs/launchd_serve.err.log</string>
+</dict>
+</plist>

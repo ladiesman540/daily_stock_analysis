@@ -10,6 +10,7 @@
 
 | Document | Description |
 |----------|-------------|
+| [Owner quickstart](../OWNER.md) | This fork's happy path: `./dsa` commands, minimal config, launchd scheduling |
 | [README (EN)](README_EN.md) | Project overview, quick start, features, sample output |
 | [Full Guide (EN)](full-guide_EN.md) | Complete setup and usage walkthrough |
 | [Deploy Guide (EN)](DEPLOY_EN.md) | Server deployment (Docker, systemd, Supervisor) |

@@ -12,6 +12,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 
+- [新功能] 新增批量符号名称接口 `GET /api/v1/research/free-data/symbol-names?symbols=A,B,C`（轮动 ETF 标签优先，其次 Nasdaq Trader 目录缓存（约 12h TTL）并剥离 " - Common Stock" 等证券类型后缀；符号上限 100、未知符号省略、目录失败 fail-open）；Web 前端 TickerChip 悬停 title 一律显示公司/ETF 名称，Today 页 Signals/New ideas/Down day 行内联展示截断名称，Signals 页发现行优先使用该接口名称，SymbolDrawer 头部与 RRG 提示框同步显示名称。
+- [新功能] 新增 UX 改版后端接口：`GET /api/v1/research/free-data/sparklines?symbols=A,B,C&days=30`（仅读 stock_daily 缓存的批量收盘价迷你曲线，符号上限 60、days 钳制在 [5,90]，未缓存符号静默省略）；`GET /api/v1/portfolio/equity-history?days=90`（按日读取 portfolio_daily_snapshots 输出权益曲线点，无快照返回空列表）；daily-brief 的 regime 节追加 `history`（14 天 as_of/score/vix）与 `breadth_trend`（30 天 as_of/pct_above_50dma，新增 `get_market_breadth_history` 存储读取，fail-open 返回空列表），Telegram 摘要输出保持逐字节不变。
+- [改进] `scripts/doctor.py` 新增 "Snapshot outputs" 检查节：报告最新 `discovery_daily` / `down_day_rs_daily` 快照的 as_of 与天数（超 3 天 warn 并提示重跑）及当日已评分新闻头条数（impact_scored_at 为今日的 news_intel 行数）；仅读 DB、fail-open，无快照行时显示 never run 提示不报错；`OWNER.md` 新增 "The daily routine" 一节，描述 Today 页（路由 `/`）与 discovery/down-day/news 三个快照步骤的产出。
+- [新功能] 新增新闻市场影响评分服务 `src/services/news_impact_service.py`：每日对当天未评分的 news_intel 头条（按标题去重、上限 40 条）发起一次批量 LLM 调用（复用现有 LLM 适配器与配置，无新增环境变量），写回 impact_score / impact_label（market_moving|sector|stock_specific|noise）/ impact_reason / impact_scored_at 四列；评分失败完全 fail-open（行保持未评分、不阻塞快照），同日重跑只选未评分行、无候选时跳过调用，用量记入 llm_usage（call_type=news_impact）；每日快照脚本新增 `news` 步骤（analysis 之后）。
+- [新功能] daily-brief 与每日摘要新增 headlines 节（当日已评分头条按影响分取 Top 3，🔴 market_moving / 🟠 sector / ⚪ stock_specific，noise 不展示；无已评分头条时不输出任何行，现有摘要保持逐字节不变）；Today 页新增 "Market-moving news" 卡（标题、来源、时效与影响等级 chip，数据复用 daily-brief 不发额外请求）。
+- [改进] `DatabaseManager` 初始化新增幂等的 `_ensure_sqlite_columns()`：对已存在的 SQLite 表自动 ALTER 补齐模型新增列（create_all 不会修改既有表），仅 SQLite 生效，非 SQLite 部署仍依赖 create_all 全新建表。
+- [新功能] 新增下跌日相对强度筛选 `DiscoveryService.run_down_day_screen()`（零额外网络开销，在每日快照 discovery 步骤内顺带执行且失败不影响 discovery 输出）：当 SPY 单日收益触及 DOWN_DAY_THRESHOLD_PCT（默认 -0.75%，可经 .env 调整）时，从已持久化的轮动快照读取板块 1D 收益、从 stock_daily 缓存读取 watchlist + 当日 discovery 入选股日线，列出「扛跌」标的（当日收红或跑赢 SPY ≥ 1 个百分点）；新增 `down_day_rs_daily` 快照表及 DAO，新增 API `GET /api/v1/research/free-data/down-day-rs/latest`。
+- [新功能] daily-brief 与每日摘要新增 down_day_rs 节（仅当最新快照为实际触发的下跌日时渲染 Holding up 一节，未触发或无快照不输出任何行，现有摘要保持逐字节不变）；Today 页新增 "What's holding up" 卡：当日为下跌日时展示板块/个股扛跌列表与 "Ask why" 预填提问跳转 Chat，否则折叠为 "Last down day was {date}" 弱化状态。
+- [新功能] 新增每日「新想法发现」服务 `src/services/discovery_service.py`：对流动性达标（价格 ≥ $5、20 日均额 ≥ $20M，可经 RESEARCH_DISCOVERY_MIN_ADV 调整）的美股池执行 52 周新高 / 相对 SPY 强度 top-decile / 放量上涨 / 板块顺风四项筛选并按综合百分位排名，Top 40 复用 GrindingLeaderScorer 输出与 Signals 页一致的 candidate_score/checklist 语言；自动排除 watchlist 与 ETF；新增 `discovery_daily` 快照表及 DAO，每日快照脚本新增 `discovery` 步骤（signals 之后），新增 API `GET /api/v1/research/free-data/discovery/latest` 与 `POST /api/v1/research/free-data/discovery/run`，扫描规模由 RESEARCH_DISCOVERY_SYMBOL_LIMIT 控制（默认 500）。
+- [新功能] 每日摘要与 daily-brief 新增 New ideas 节（Top 5 + 一行理由；无 discovery 快照时不输出任何行，现有摘要保持逐字节不变）；Today 页新增 New Ideas 卡（Top 5 + 行内 Add to watchlist 按钮），Signals 页新增 Discovered ideas 完整排名列表。
+- [新功能] 新增聚合接口 GET /api/v1/research/free-data/daily-brief：复用每日摘要的 regime/rotation/cycle/signals 查询输出 JSON（每节带 as_of/age_days/freshness），`DailyDigestService` 重构为 collect_brief() 数据层 + 薄 Markdown 渲染层，Telegram 摘要输出保持逐字节不变。
+- [新功能] Web 前端新增 Today 页（路由 `/`，晨间例行顺序：regime → cycle → rotation/RRG → top signals → 纸面组合迷你卡 → "Ask about today" 跳转 Chat 预填问题），原单股分析首页迁移至 `/analyze`（`/home` 重定向兼容），侧边栏新增 Today 项并将原 Home 改名 Analyze。
+- [新功能] US watchlist 从 RESEARCH_US_WATCHLIST 环境变量迁移到 DB 表 watchlist_symbols，新增 Settings 页"US Watchlist"面板（增删符号 + 备注），新增 API GET/POST/DELETE /api/v1/research/watchlist；RESEARCH_US_WATCHLIST 仅作首次空表一次性种子导入，后续以 DB 为准。
+- [新功能] 新增 `./dsa` 快捷 CLI（doctor/analyze/snapshot/dashboard/schedule/logs 六个子命令，薄封装现有入口）与配置诊断脚本 `scripts/doctor.py`（只读检查 LLM 配置层级、数据源密钥、通知渠道、前端构建产物、launchd 调度与数据库状态，`--live`/`--json` 可选），详见 `OWNER.md`。
+- [文档] 新增 `OWNER.md`（本 fork 的美股工作流快速上手）与 `.env.owner.example`（最小配置模板），`docs/INDEX_EN.md` 增加入口链接。
+- [新功能] 每日快照新增 `analysis` 步骤：对 `RESEARCH_US_WATCHLIST` 中每只股票刷新 LLM 分析报告（不单独推送，仅入库供首页展示），位于 signals 之后、portfolio 之前，保证纸面交易基于当日最新分析。
+- [改进] `NotificationService.send()` 新增 `last_send_results` 逐渠道发送结果记录；`scripts/daily_snapshot.py` 的 notify/signals 步骤摘要分别输出逐渠道结果与诊断信息样本，便于定位静默失败。
+- [新功能] 周期栈（Cycle Stack）：新增多周期板块轮动引擎 `src/services/rotation_service.py`（51 只 ETF 相对 SPY 的 1D/1W/1M/3M/6M/12M 相对强度排名、RRG 四象限、Top3 排名变动检测）与商业周期分类器 `src/services/macro_cycle_service.py`（9 个 FRED 指标投票产生 early/mid/late/contraction 相位、Sahm 规则硬覆盖、相位 playbook 与盘面背离检测、加密周期仪表）。
+- [新功能] 新增 `sector_rotation_daily` 与 `macro_cycle_daily` 每日快照表及 DAO；每日快照脚本新增 rotation/cycle 两个步骤；新增 API `GET/POST /api/v1/research/free-data/rotation|cycle/*`。
+- [新功能] Rotation 页面重建为「Rotation & Cycle」：多周期 Hot/Not 排行榜（分组/周期切换）、RRG 四象限卡片、商业周期指标表、加密周期卡片，原信号扫描 memo 保留在页底。
+- [改进] 每日摘要新增 Rotation（各周期领涨/领跌+排名变动箭头）与 Cycle（相位+背离警告+加密仪表）两节；阈值告警新增周期相位变化与 1M Top3 进出。
+- [改进] FRED 抓取新增全历史接口 `fred_series_history`（cosd 参数限制区间、Connection: close 规避连续请求挂起、超时重试一次）。
+- [新功能] 新增每日快照编排脚本 `scripts/daily_snapshot.py`（breadth/regime/signals/portfolio/backtest/notify 六步可单独执行）与 macOS launchd 调度模板 `scripts/launchd/`，详见 `docs/macos-scheduling.md`。
+- [新功能] 量化市场状态引擎：`market_regime_daily` 表按日持久化 regime 快照，新增 VIX/VIX3M 波动率组件与期限结构倒挂封顶，新增 `GET /api/v1/research/free-data/market-regime/history`，美股大盘复盘 Prompt 注入确定性 regime 数据块。
+- [新功能] 纸面组合服务 `src/services/paper_trading_service.py`：自动把带有 entry/stop/target 的分析结果镜像为纸面持仓，每日按止损/止盈/超时规则平仓，复用现有 portfolio 模块。
+- [新功能] 每日摘要与阈值告警 `src/services/daily_digest.py`：regime 变化、VIX 压力、纸面持仓触发止损/止盈时通过现有通知渠道推送，去重状态持久化在 data/alert_state.json。
+- [改进] 市场宽度改为诚实的免费档 ETF 代理宇宙 `us_etf_proxy`（约 50 只流动性 ETF），快照统一使用众数 as-of 日期并剔除 stale bar，宽度接口默认 universe 同步更新。
+- [改进] 研究数据层增加本地日线缓存（stock_daily 复用）、Massive/Polygon 进程级限速、yfinance 限速；加密货币行情改为 Binance → Kraken → CoinGecko 降级链并带 Retry-After 冷却，修复全量 429。
+- [修复] 信号评分饱和问题：数据不足时 `candidate_score` 置为 NULL（状态 no_data）不再污染排名，评分组件改为连续函数并新增相对 SPY 的相对强度项，理论满分降至 100 以下消除 100 分墙。
+- [改进] Web UI 新增 `DataFreshnessBadge` 数据新鲜度徽章（Signals/Positioning/Rotation 页面），信号分数为空时显示 n/a 不再崩溃。
 - [修复] `AGENT_MAX_STEPS` 在 orchestrator 多 Agent 模式下改为作为各子 Agent 的步数上限而非硬覆盖；TechnicalAgent 等高默认值 Agent 会被封顶，低默认值 Agent 保持原值，减少不必要的 LLM 调用膨胀与配额消耗。
 - [修复] **MiniMax-M2.7 模型连接测试支持** — 修复 LLM 通道连接测试在 MiniMax-M2.7 模型下返回 "Empty response" 的问题；增加了 `max_tokens` 上限（8→256）以容纳 MiniMax 思考过程，并添加 `content_blocks` 格式解析逻辑统一处理 MiniMax 响应格式差异。
 - [修复] 移除 `HistoryItem` 与 `ReportSummary` 响应 Schema 中 `sentiment_score` 的 `ge=0/le=100` 约束（fixes #942）——历史库中存储的超范围负值或大于 100 的情绪评分不再触发 Pydantic ValidationError，历史列表与详情接口恢复正常返回。
@@ -38,6 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [改进] TushareFetcher `_normalize_data` 对港股（`hk_daily`）不再对 `vol`/`amount` 做 A 股手→股、千元→元 的缩放，与 Tushare 港股字段语义一致。
 - [测试] 补充 `TushareFetcher._normalize_data` 港股与 A 股/ETF 单位处理的单元测试。
 - [新功能] 集成 Anspire Search 作为可选语义搜索后端; 配置 `ANSPIRE_*` 可使用Anspire Search获取实时行情及新闻资讯，未配置时行为与此前一致。Anspire Search请使用 `tests/test_anspire_search.py`（手动脚本）。
+- [新功能] Web 前端仪表盘 UX 改版：新增术语 InfoTip 弹层（`utils/glossary.ts` 词条 + 计算口径）、可点击 TickerChip 与 SymbolDrawer 符号详情抽屉（3 个月收盘价图 + "Why it's here" 上下文 + 加自选/全量分析入口），Today 页各卡改为图表先行（RegimeGauge / MiniTrend / RRGScatter / Sparkline / EquityCurve / 周期阶段条 / vs-SPY 差值条），Signals 页信号卡与 Discovered ideas 列表同步接入 TickerChip 抽屉与共享的筛选通过徽章；纯前端改动，复用既有 API，390px 移动端无横向溢出。
 
 ## [3.12.0] - 2026-04-01
 

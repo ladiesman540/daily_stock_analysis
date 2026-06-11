@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.dsa.daily-snapshot</string>
+
+    <!-- Adjust paths if the repo lives elsewhere. -->
+    <key>WorkingDirectory</key>
+    <string>/Users/Uzi/Appz/finance-repos/daily_stock_analysis</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/Uzi/Appz/finance-repos/daily_stock_analysis/.venv312/bin/python</string>
+        <string>scripts/daily_snapshot.py</string>
+    </array>
+
+    <!-- Weekdays at 15:00 local (Mountain) = 17:00 ET, after the US close.
+         launchd StartCalendarInterval runs missed jobs on wake, unlike cron. -->
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>/Users/Uzi/Appz/finance-repos/daily_stock_analysis/logs/launchd_daily_snapshot.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/Uzi/Appz/finance-repos/daily_stock_analysis/logs/launchd_daily_snapshot.err.log</string>
+</dict>
+</plist>

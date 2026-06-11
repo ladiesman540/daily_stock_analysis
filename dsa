@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# dsa — the happy-path CLI for this fork.
+# Thin wrapper over existing entry points; see OWNER.md. Full CLI: main.py --help.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON="${DSA_PYTHON:-$ROOT/.venv312/bin/python}"
+if [[ ! -x "$PYTHON" ]]; then
+  echo "warn: $PYTHON not found, falling back to python3 on PATH" >&2
+  PYTHON="python3"
+fi
+
+PLISTS=(com.dsa.daily-snapshot)
+ALL_PLISTS=(com.dsa.daily-snapshot com.dsa.intraday-check com.dsa.serve)
+AGENTS_DIR="$HOME/Library/LaunchAgents"
+
+usage() {
+  cat <<'EOF'
+Usage: ./dsa <command> [args]
+
+  doctor [--live] [--json]   Diagnose config: LLM path, data keys, channels, scheduling
+  analyze SYMBOLS [...]      One-off analysis, e.g. ./dsa analyze AAPL,COHR
+  snapshot [--steps a,b]     The daily morning run (breadth..signals..portfolio..notify)
+  dashboard                  Serve the web UI at http://127.0.0.1:8000
+  schedule install|status|uninstall [--all]
+                             Manage launchd jobs (--all adds intraday + serve)
+  logs [snapshot|serve]      Tail the launchd logs
+
+Anything not covered here: main.py --help (29 flags) and docs/.
+EOF
+}
+
+schedule_install() {
+  local jobs=("${PLISTS[@]}")
+  [[ "${1:-}" == "--all" ]] && jobs=("${ALL_PLISTS[@]}")
+  mkdir -p "$AGENTS_DIR" "$ROOT/logs"
+  for job in "${jobs[@]}"; do
+    cp "$ROOT/scripts/launchd/$job.plist" "$AGENTS_DIR/"
+    launchctl bootout "gui/$(id -u)/$job" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$AGENTS_DIR/$job.plist"
+    echo "installed + loaded: $job"
+  done
+  echo "force a run now with: launchctl kickstart gui/$(id -u)/com.dsa.daily-snapshot"
+}
+
+schedule_uninstall() {
+  for job in "${ALL_PLISTS[@]}"; do
+    if [[ -f "$AGENTS_DIR/$job.plist" ]]; then
+      launchctl bootout "gui/$(id -u)/$job" 2>/dev/null || true
+      rm "$AGENTS_DIR/$job.plist"
+      echo "removed: $job"
+    fi
+  done
+}
+
+schedule_status() {
+  local found=0
+  for job in "${ALL_PLISTS[@]}"; do
+    if [[ -f "$AGENTS_DIR/$job.plist" ]]; then
+      found=1
+      if launchctl list 2>/dev/null | grep -q "$job"; then
+        echo "loaded:        $job"
+      else
+        echo "installed (not loaded): $job"
+      fi
+    fi
+  done
+  [[ $found -eq 0 ]] && echo "no com.dsa.* jobs installed — run: ./dsa schedule install"
+  return 0
+}
+
+cmd="${1:-}"
+[[ $# -gt 0 ]] && shift
+
+case "$cmd" in
+  doctor)
+    exec "$PYTHON" "$ROOT/scripts/doctor.py" "$@"
+    ;;
+  analyze)
+    [[ $# -ge 1 ]] || { echo "usage: ./dsa analyze SYMBOLS (e.g. AAPL,COHR)" >&2; exit 2; }
+    syms="$1"; shift
+    exec "$PYTHON" "$ROOT/main.py" --stocks "$syms" --no-market-review "$@"
+    ;;
+  snapshot)
+    exec "$PYTHON" "$ROOT/scripts/daily_snapshot.py" "$@"
+    ;;
+  dashboard)
+    echo "starting web UI at http://127.0.0.1:8000 (Ctrl-C to stop)"
+    exec "$PYTHON" "$ROOT/main.py" --serve-only "$@"
+    ;;
+  schedule)
+    sub="${1:-status}"; [[ $# -gt 0 ]] && shift
+    case "$sub" in
+      install)   schedule_install "$@" ;;
+      uninstall) schedule_uninstall ;;
+      status)    schedule_status ;;
+      *) echo "usage: ./dsa schedule install|status|uninstall [--all]" >&2; exit 2 ;;
+    esac
+    ;;
+  logs)
+    which="${1:-snapshot}"
+    case "$which" in
+      snapshot) exec tail -f "$ROOT/logs/launchd_daily_snapshot.log" ;;
+      serve)    exec tail -f "$ROOT/logs/launchd_serve.log" ;;
+      *) echo "usage: ./dsa logs [snapshot|serve]" >&2; exit 2 ;;
+    esac
+    ;;
+  ""|help|-h|--help)
+    usage
+    ;;
+  *)
+    echo "unknown command: $cmd" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
