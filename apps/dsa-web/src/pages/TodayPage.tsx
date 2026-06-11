@@ -358,7 +358,7 @@ const TodayPage: React.FC = () => {
           title="Market regime"
           loading={loading}
           section={regime}
-          missingText="Run the daily snapshot job to persist a regime read."
+          missingText="No market data yet — it arrives automatically with the nightly update (6:00 PM)."
         >
           <div className="space-y-3 text-sm text-foreground">
             <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
@@ -431,7 +431,7 @@ const TodayPage: React.FC = () => {
           title="Macro cycle"
           loading={loading}
           section={cycle}
-          missingText="Run the daily snapshot job (cycle step) to persist a phase read."
+          missingText="No cycle read yet — it arrives automatically with the nightly update (6:00 PM)."
         >
           <div className="space-y-3 text-sm text-foreground">
             <div className="flex flex-wrap items-center gap-2">
@@ -481,7 +481,7 @@ const TodayPage: React.FC = () => {
           to="/rotation"
           loading={loading}
           section={rotation}
-          missingText="Run the daily snapshot job (rotation step) to persist rotation ranks."
+          missingText="No sector rankings yet — they arrive automatically with the nightly update (6:00 PM)."
         >
           <div className="space-y-3 text-sm">
             {sectorRrgPoints.length ? (
@@ -588,7 +588,7 @@ const TodayPage: React.FC = () => {
           to="/signals"
           loading={loading}
           section={discovery}
-          missingText="Run the daily snapshot job (discovery step) to surface new non-watchlist ideas."
+          missingText="No new ideas yet — they arrive automatically with the nightly update (6:00 PM)."
         >
           {(discovery?.top || []).length ? (
             <div className="space-y-2 text-sm">
@@ -657,7 +657,7 @@ const TodayPage: React.FC = () => {
           title="What's holding up"
           loading={loading}
           section={downDay}
-          missingText="Runs inside the daily snapshot job (discovery step). No down-day snapshot persisted yet."
+          missingText="No down-day data yet — it arrives automatically with the nightly update (6:00 PM)."
         >
           {downDayActive ? (
             <div className="space-y-2 text-sm">
@@ -745,7 +745,7 @@ const TodayPage: React.FC = () => {
           title="Market-moving news"
           loading={loading}
           section={headlines}
-          missingText="Runs inside the daily snapshot job (news step). No scored headlines today."
+          missingText="No scored headlines today — news is rated automatically with the nightly update (6:00 PM)."
         >
           {(headlines?.top || []).length ? (
             <div className="space-y-2 text-sm">

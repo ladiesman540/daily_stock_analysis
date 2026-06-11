@@ -703,6 +703,63 @@ def _build_schedule_time_provider(default_schedule_time: str):
     return _provider
 
 
+# First-boot bootstrap: steps skipped in the one-time snapshot on a fresh DB
+# (no per-stock LLM analysis, no notifications).
+_BOOTSTRAP_EXCLUDED_STEPS = ("analysis", "notify")
+
+
+def _needs_bootstrap_snapshot() -> bool:
+    """True when the DB has neither a rotation snapshot nor a market-regime row."""
+    from src.storage import DatabaseManager
+
+    db = DatabaseManager.get_instance()
+    if db.get_latest_sector_rotation_snapshot() is not None:
+        return False
+    if db.get_latest_market_regime_snapshot() is not None:
+        return False
+    return True
+
+
+def _run_bootstrap_snapshot(delay_seconds: float = 45.0) -> None:
+    """Run the one-time first-boot snapshot steps. Entirely fail-open."""
+    try:
+        if delay_seconds > 0:
+            time.sleep(delay_seconds)  # let uvicorn settle before heavy work
+        from scripts.daily_snapshot import ALL_STEPS, STEP_RUNNERS
+
+        steps = [step for step in ALL_STEPS if step not in _BOOTSTRAP_EXCLUDED_STEPS]
+        context: dict = {"send_digest": False}
+        for step in steps:
+            try:
+                result = STEP_RUNNERS[step](context)
+                logger.info("Bootstrap snapshot step %s ok: %s", step, result)
+            except Exception as exc:
+                logger.warning("Bootstrap snapshot step %s failed (continuing): %s", step, exc)
+        logger.info("Bootstrap snapshot finished")
+    except Exception as exc:
+        logger.warning("Bootstrap snapshot aborted: %s", exc)
+
+
+def _maybe_start_bootstrap_snapshot() -> None:
+    """Spawn the one-time bootstrap thread when the DB is fresh. Fail-open."""
+    try:
+        if not _needs_bootstrap_snapshot():
+            return
+        logger.info(
+            "Fresh database detected — running one-time bootstrap snapshot (excluding: %s)",
+            ", ".join(_BOOTSTRAP_EXCLUDED_STEPS),
+        )
+        import threading
+
+        threading.Thread(
+            target=_run_bootstrap_snapshot,
+            name="bootstrap_snapshot",
+            daemon=True,
+        ).start()
+    except Exception as exc:
+        logger.warning("Bootstrap snapshot check failed (skipped): %s", exc)
+
+
 def main() -> int:
     """
     主入口函数
@@ -930,6 +987,11 @@ def main() -> int:
                     })
                 else:
                     logger.info("EventMonitor 已启用，但未加载到有效规则，跳过后台提醒任务")
+
+            # 全新空库首次启动：在 Web 服务可用后异步执行一次性引导快照，
+            # 让页面在首个定时任务前就有数据（跳过 analysis/notify，完全 fail-open）。
+            if start_serve:
+                _maybe_start_bootstrap_snapshot()
 
             run_with_schedule(
                 task=scheduled_task,

@@ -173,7 +173,7 @@ const RotationPage: React.FC = () => {
         <EmptyState
           icon={<RotateCw className="h-6 w-6" />}
           title="No rotation snapshot yet"
-          description={rotation?.summary || 'Run the daily snapshot job (rotation step) or hit Recompute.'}
+          description={rotation?.summary || 'No sector data yet — it arrives automatically with the nightly update (6:00 PM), or press Recompute to build it now.'}
           className="mb-4"
         />
       ) : (

@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->
 
+- [新功能] 定时 + Web 服务模式（`--schedule --serve`）首次启动时若检测到全新空数据库（无轮动快照且无市场体制记录），延迟约 45 秒后在后台线程一次性执行引导快照（跳过 analysis/notify 步骤，不发 LLM 分析与通知），失败完全 fail-open 不影响服务与调度；页面在首个定时任务前即可有数据。
+- [改进] Web 端空状态文案去技术化：Today/Rotation/Signals 页的 "Run the daily snapshot job..." 等提示改为面向用户的说明（数据随每晚 6:00 PM 自动更新）；Signals 页布局重构为结果优先（候选列表与 Discovered Ideas 前置、全空时显示单一引导卡 + Run a scan now 按钮、扫描设置折叠为 "Scan settings" 二级区块、说明卡片移至页尾），功能保持不变。
+
 - [新功能] 新增批量符号名称接口 `GET /api/v1/research/free-data/symbol-names?symbols=A,B,C`（轮动 ETF 标签优先，其次 Nasdaq Trader 目录缓存（约 12h TTL）并剥离 " - Common Stock" 等证券类型后缀；符号上限 100、未知符号省略、目录失败 fail-open）；Web 前端 TickerChip 悬停 title 一律显示公司/ETF 名称，Today 页 Signals/New ideas/Down day 行内联展示截断名称，Signals 页发现行优先使用该接口名称，SymbolDrawer 头部与 RRG 提示框同步显示名称。
 - [新功能] 新增 UX 改版后端接口：`GET /api/v1/research/free-data/sparklines?symbols=A,B,C&days=30`（仅读 stock_daily 缓存的批量收盘价迷你曲线，符号上限 60、days 钳制在 [5,90]，未缓存符号静默省略）；`GET /api/v1/portfolio/equity-history?days=90`（按日读取 portfolio_daily_snapshots 输出权益曲线点，无快照返回空列表）；daily-brief 的 regime 节追加 `history`（14 天 as_of/score/vix）与 `breadth_trend`（30 天 as_of/pct_above_50dma，新增 `get_market_breadth_history` 存储读取，fail-open 返回空列表），Telegram 摘要输出保持逐字节不变。
 - [改进] `scripts/doctor.py` 新增 "Snapshot outputs" 检查节：报告最新 `discovery_daily` / `down_day_rs_daily` 快照的 as_of 与天数（超 3 天 warn 并提示重跑）及当日已评分新闻头条数（impact_scored_at 为今日的 news_intel 行数）；仅读 DB、fail-open，无快照行时显示 never run 提示不报错；`OWNER.md` 新增 "The daily routine" 一节，描述 Today 页（路由 `/`）与 discovery/down-day/news 三个快照步骤的产出。

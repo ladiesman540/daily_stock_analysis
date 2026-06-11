@@ -1,6 +1,6 @@
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, DatabaseZap, RefreshCcw, SearchCheck, SlidersHorizontal, TrendingUp } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ChevronUp, DatabaseZap, RefreshCcw, SearchCheck, SlidersHorizontal, TrendingUp } from 'lucide-react';
 import { AppPage, Badge, Button, Card, DataFreshnessBadge, DecisionExplanation as DecisionExplanationPanel, DiscoveryScreenBadges, EmptyState, InlineAlert, TickerChip } from '../components/common';
 import type { DecisionExplanationData } from '../components/common';
 import { researchApi, type DiscoverySnapshotResponse, type PriceHistoryResponse, type SignalCandidate, type SignalRun } from '../api/research';
@@ -248,6 +248,7 @@ const SignalsPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [discovery, setDiscovery] = useState<DiscoverySnapshotResponse | null>(null);
+  const [showScanSettings, setShowScanSettings] = useState(false);
 
   const hydrateScanControls = useCallback((nextRun: SignalRun) => {
     const params = nextRun.parameters || {};
@@ -345,6 +346,10 @@ const SignalsPage: React.FC = () => {
     return dates.length ? dates[dates.length - 1] : run?.completed_at || null;
   }, [run]);
 
+  const hasCandidates = (run?.candidates?.length ?? 0) > 0;
+  const hasDiscovery = discovery?.status === 'completed';
+  const showHeroEmpty = !hasCandidates && !hasDiscovery;
+
   return (
     <AppPage>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -363,70 +368,101 @@ const SignalsPage: React.FC = () => {
 
       {error ? <InlineAlert variant="danger" title="Research error" message={error} className="mb-4" /> : null}
 
-      <div className="mb-3 grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-4">
-        <MetricCard label="Candidates" value={stats.total} />
-        <MetricCard label="Passed" value={stats.pass} tone="success" />
-        <MetricCard label="Watchlist" value={stats.watchlist} tone="warning" />
-        <MetricCard label="Crypto" value={stats.crypto} tone="info" />
-      </div>
-
-      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-border/60 bg-elevated/35 p-2.5">
-        <SlidersHorizontal className="h-4 w-4 text-secondary-text" />
-        {(['watchlist', 'pass', 'reject', 'all'] as const).map((item) => (
-          <Button
-            key={item}
-            variant={statusFilter === item ? 'primary' : 'secondary'}
-            size="sm"
-            onClick={() => setStatusFilter(item)}
-          >
-            {item}
-          </Button>
-        ))}
-        {(['stock', 'crypto', 'all'] as const).map((item) => (
-          <Button
-            key={item}
-            variant={assetFilter === item ? 'outline' : 'ghost'}
-            size="sm"
-            onClick={() => setAssetFilter(item)}
-          >
-            {item}
-          </Button>
-        ))}
-      </div>
-
-      <ScanSetupPanel
-        run={run}
-        scanSymbols={scanSymbols}
-        onScanSymbolsChange={setScanSymbols}
-        includeStocks={includeStocks}
-        onIncludeStocksChange={setIncludeStocks}
-        includeCrypto={includeCrypto}
-        onIncludeCryptoChange={setIncludeCrypto}
-        onUseDefaults={() => setScanSymbols(DEFAULT_STOCK_SCAN_SYMBOLS.join(', '))}
-        onClear={() => setScanSymbols('')}
-        onRun={handleRun}
-        loading={loading}
-      />
-
-      <DecisionExplanationPanel data={SIGNALS_RULE_EXPLANATION} compact className="mb-4" />
-
-      {filtered.length === 0 ? (
-        <EmptyState
-          icon={<TrendingUp className="h-6 w-6" />}
-          title="No candidates"
-          description="Run a weekly scan or loosen filters."
-        />
+      {showHeroEmpty ? (
+        <Card padding="md" className="mb-4 rounded-lg">
+          <EmptyState
+            icon={<TrendingUp className="h-6 w-6" />}
+            title="No signals yet"
+            description="This page scans stocks and crypto for strong setups and ranks the best ideas. Your first signals arrive automatically with the nightly update (6:00 PM) — or run a scan now."
+            action={(
+              <Button onClick={handleRun} isLoading={loading} loadingText="Scanning" disabled={!includeStocks && !includeCrypto}>
+                <RefreshCcw className="h-4 w-4" />
+                Run a scan now
+              </Button>
+            )}
+          />
+        </Card>
       ) : (
-        <div className="grid gap-3 xl:grid-cols-2">
-          {filtered.map((candidate) => (
-            <CandidateCard key={candidate.id} candidate={candidate} />
-          ))}
-        </div>
+        <>
+          <div className="mb-3 grid grid-cols-2 gap-2 sm:gap-3 md:grid-cols-4">
+            <MetricCard label="Candidates" value={stats.total} />
+            <MetricCard label="Passed" value={stats.pass} tone="success" />
+            <MetricCard label="Watchlist" value={stats.watchlist} tone="warning" />
+            <MetricCard label="Crypto" value={stats.crypto} tone="info" />
+          </div>
+
+          <div className="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-border/60 bg-elevated/35 p-2.5">
+            <SlidersHorizontal className="h-4 w-4 text-secondary-text" />
+            {(['watchlist', 'pass', 'reject', 'all'] as const).map((item) => (
+              <Button
+                key={item}
+                variant={statusFilter === item ? 'primary' : 'secondary'}
+                size="sm"
+                onClick={() => setStatusFilter(item)}
+              >
+                {item}
+              </Button>
+            ))}
+            {(['stock', 'crypto', 'all'] as const).map((item) => (
+              <Button
+                key={item}
+                variant={assetFilter === item ? 'outline' : 'ghost'}
+                size="sm"
+                onClick={() => setAssetFilter(item)}
+              >
+                {item}
+              </Button>
+            ))}
+          </div>
+
+          {filtered.length === 0 ? (
+            <EmptyState
+              icon={<TrendingUp className="h-6 w-6" />}
+              title="No candidates"
+              description={hasCandidates
+                ? 'Nothing matches the current filters — try a different status or asset filter above.'
+                : 'Signals arrive automatically with the nightly update (6:00 PM), or run a scan now with the Run scan button above.'}
+            />
+          ) : (
+            <div className="grid gap-3 xl:grid-cols-2">
+              {filtered.map((candidate) => (
+                <CandidateCard key={candidate.id} candidate={candidate} />
+              ))}
+            </div>
+          )}
+
+          <DiscoverySection discovery={discovery} />
+        </>
       )}
 
-      <DiscoverySection discovery={discovery} />
+      <div className="mt-5">
+        <Button variant="secondary" size="sm" onClick={() => setShowScanSettings((value) => !value)}>
+          {showScanSettings ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+          {showScanSettings ? 'Hide scan settings' : 'Scan settings'}
+        </Button>
+      </div>
 
-      <div className="mt-5 grid gap-4 xl:grid-cols-2">
+      {showScanSettings ? (
+        <div className="mt-3">
+          <ScanSetupPanel
+            run={run}
+            scanSymbols={scanSymbols}
+            onScanSymbolsChange={setScanSymbols}
+            includeStocks={includeStocks}
+            onIncludeStocksChange={setIncludeStocks}
+            includeCrypto={includeCrypto}
+            onIncludeCryptoChange={setIncludeCrypto}
+            onUseDefaults={() => setScanSymbols(DEFAULT_STOCK_SCAN_SYMBOLS.join(', '))}
+            onClear={() => setScanSymbols('')}
+            onRun={handleRun}
+            loading={loading}
+          />
+        </div>
+      ) : null}
+
+      <DecisionExplanationPanel data={SIGNALS_RULE_EXPLANATION} compact className="mt-5" />
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-2">
         <Card title="What This Page Is" subtitle="Signal machine" padding="md" className="rounded-lg">
           <div className="grid gap-3">
             <GuidePoint
@@ -720,8 +756,8 @@ const DiscoverySection: React.FC<{ discovery: DiscoverySnapshotResponse | null }
       {discovery?.status !== 'completed' ? (
         <EmptyState
           icon={<TrendingUp className="h-6 w-6" />}
-          title="No discovery snapshot yet"
-          description="Run the daily snapshot job (discovery step) to surface new ideas here."
+          title="No discovered ideas yet"
+          description="New ideas arrive automatically with the nightly update (6:00 PM)."
         />
       ) : rows.length === 0 ? (
         <EmptyState
