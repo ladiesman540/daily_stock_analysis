@@ -773,11 +773,26 @@ def _snapshot_pipeline_task() -> None:
     """Background-task wrapper: run the pipeline only when due. Fail-open."""
     try:
         if not _snapshot_pipeline_due():
+            _catch_up_news_scoring()
             return
         logger.info("Routine snapshot pipeline due — running now")
         _run_snapshot_pipeline()
     except Exception as exc:
         logger.warning("Routine snapshot pipeline aborted: %s", exc)
+
+
+def _catch_up_news_scoring() -> None:
+    """Score headlines that arrived after the daily news step (e.g. from
+    on-demand analyses, or when the step ran before an LLM key existed).
+    run_daily_scoring() no-ops when nothing is unscored. Fail-open."""
+    try:
+        from src.services.news_impact_service import NewsImpactService
+
+        result = NewsImpactService().run_daily_scoring()
+        if result.get("scored"):
+            logger.info("News impact catch-up scored %s headline(s)", result["scored"])
+    except Exception as exc:
+        logger.warning("News impact catch-up failed (skipped): %s", exc)
 
 
 def main() -> int:
