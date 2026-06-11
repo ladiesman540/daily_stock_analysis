@@ -724,15 +724,25 @@ def _snapshot_schedule_time() -> "datetime_time":
 
 
 def _snapshot_pipeline_due() -> bool:
-    """True when the routine snapshot should run now. Fail-open to False."""
+    """True when the routine snapshot should run now. Fail-open to False.
+
+    Rotation is written early in the pipeline and discovery near the end, so
+    "discovery missing or older than rotation" means the last run never
+    completed (fresh DB, or a container was replaced mid-run) — re-run
+    immediately. Otherwise run once per US session after the schedule time.
+    """
     from datetime import datetime as dt
 
     from src.storage import DatabaseManager
 
     db = DatabaseManager.get_instance()
-    latest = db.get_latest_sector_rotation_snapshot()
-    if latest is None:
+    rotation = db.get_latest_sector_rotation_snapshot()
+    if rotation is None:
         return True  # fresh database: bootstrap immediately
+    discovery = db.get_latest_discovery_snapshot()
+    rotation_as_of = str(rotation.get("as_of") or "")
+    if discovery is None or str(discovery.get("as_of") or "") < rotation_as_of:
+        return True  # last run died midway: finish the job now
     now = dt.now()
     if now.time() < _snapshot_schedule_time():
         return False
@@ -742,8 +752,7 @@ def _snapshot_pipeline_due() -> bool:
         expected = _latest_expected_us_bar_date()
     except Exception:
         expected = now.date()
-    as_of = str(latest.get("as_of") or "")
-    return bool(expected) and as_of < str(expected)
+    return bool(expected) and rotation_as_of < str(expected)
 
 
 def _run_snapshot_pipeline() -> None:

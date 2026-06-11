@@ -96,9 +96,16 @@ class SnapshotPipelineDueTestCase(unittest.TestCase):
 
     def test_current_time_before_schedule_is_not_due(self) -> None:
         """If current time is before schedule time, not due yet."""
+        today = str(date.today())
         self.db.save_sector_rotation_snapshot({
-            "as_of": "2026-06-10",
+            "as_of": today,
             "benchmark": "SPY",
+            "constituents": [],
+        })
+        self.db.save_discovery_snapshot({
+            "as_of": today,
+            "universe_size": 100,
+            "qualified_size": 50,
             "constituents": [],
         })
         os.environ["SNAPSHOT_SCHEDULE_TIME"] = "23:59"  # very late, so now is before this
@@ -126,9 +133,64 @@ class SnapshotPipelineDueTestCase(unittest.TestCase):
             "benchmark": "SPY",
             "constituents": [],
         })
+        self.db.save_discovery_snapshot({
+            "as_of": today,
+            "universe_size": 100,
+            "qualified_size": 50,
+            "constituents": [],
+        })
         os.environ["SNAPSHOT_SCHEDULE_TIME"] = "00:00"  # always in the past
         with patch("src.services.research_market_data._latest_expected_us_bar_date", return_value=date.today()):
             result = main._snapshot_pipeline_due()
+        self.assertFalse(result)
+
+    def test_rotation_seeded_no_discovery_is_due(self) -> None:
+        """Rotation snapshot exists but no discovery snapshot -> due immediately."""
+        self.db.save_sector_rotation_snapshot({
+            "as_of": str(date.today()),
+            "benchmark": "SPY",
+            "constituents": [],
+        })
+        # No discovery snapshot saved
+        os.environ["SNAPSHOT_SCHEDULE_TIME"] = "23:59"  # even before schedule time
+        result = main._snapshot_pipeline_due()
+        self.assertTrue(result)
+
+    def test_rotation_today_discovery_yesterday_is_due(self) -> None:
+        """Rotation as_of=today, discovery as_of=yesterday -> due."""
+        today = str(date.today())
+        yesterday = str(date.today() - __import__('datetime').timedelta(days=1))
+        self.db.save_sector_rotation_snapshot({
+            "as_of": today,
+            "benchmark": "SPY",
+            "constituents": [],
+        })
+        self.db.save_discovery_snapshot({
+            "as_of": yesterday,
+            "universe_size": 100,
+            "qualified_size": 50,
+            "constituents": [],
+        })
+        os.environ["SNAPSHOT_SCHEDULE_TIME"] = "23:59"  # even before schedule time
+        result = main._snapshot_pipeline_due()
+        self.assertTrue(result)
+
+    def test_rotation_and_discovery_both_today_future_schedule_not_due(self) -> None:
+        """Rotation and discovery both as_of=today, schedule time in future -> not due."""
+        today = str(date.today())
+        self.db.save_sector_rotation_snapshot({
+            "as_of": today,
+            "benchmark": "SPY",
+            "constituents": [],
+        })
+        self.db.save_discovery_snapshot({
+            "as_of": today,
+            "universe_size": 100,
+            "qualified_size": 50,
+            "constituents": [],
+        })
+        os.environ["SNAPSHOT_SCHEDULE_TIME"] = "23:59"  # very late, so now is before this
+        result = main._snapshot_pipeline_due()
         self.assertFalse(result)
 
 
