@@ -67,9 +67,20 @@ def _get_credential_path() -> Path:
 
 
 def _is_auth_enabled_from_env() -> bool:
-    """Read ADMIN_AUTH_ENABLED from .env file."""
+    """Read ADMIN_AUTH_ENABLED from the process env, falling back to the .env file.
+
+    Container platforms (Railway, etc.) inject config as process env vars with
+    no .env file on disk, so the process env must win when set.
+    """
     _ensure_env_loaded()
     env_file = os.getenv("ENV_FILE")
+    if not env_file:
+        # No explicit env file: container platforms (Railway, etc.) inject
+        # config as process env vars with no .env on disk.
+        process_val = (os.getenv("ADMIN_AUTH_ENABLED") or "").strip().lower()
+        default_env = Path(__file__).resolve().parent.parent / ".env"
+        if process_val and not default_env.exists():
+            return process_val in ("true", "1", "yes")
     env_path = Path(env_file) if env_file else Path(__file__).resolve().parent.parent / ".env"
     if not env_path.exists():
         return False
