@@ -90,14 +90,15 @@ const getSkillDescription = (skill: SkillInfo): string =>
 const containsHanText = (value?: string | null): boolean =>
   /[\u3400-\u9fff]/.test(value || '');
 
-const LEGACY_NON_ENGLISH_MESSAGE =
-  'This older reply was generated before English mode and has been hidden. Ask again and the agent will answer in English.';
+// Chat content is never hidden — an untranslated reply is still the user's
+// data. A one-line notice marks it; REPORT_LANGUAGE=en keeps new replies
+// in English.
+const UNTRANSLATED_NOTICE =
+  '_(Untranslated reply — ask again and the agent will answer in English.)_\n\n';
 
 const getVisibleMessageContent = (msg: Message): string => {
-  if (containsHanText(msg.content)) {
-    return msg.role === 'assistant'
-      ? LEGACY_NON_ENGLISH_MESSAGE
-      : '[Non-English message hidden]';
+  if (containsHanText(msg.content) && msg.role === 'assistant') {
+    return UNTRANSLATED_NOTICE + msg.content;
   }
   return msg.content;
 };

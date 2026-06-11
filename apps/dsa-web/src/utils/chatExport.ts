@@ -4,12 +4,11 @@ const containsHanText = (value?: string | null): boolean =>
   /[\u3400-\u9fff]/.test(value || '');
 
 const visibleMessageContent = (msg: Message): string => {
-  if (!containsHanText(msg.content)) {
-    return msg.content;
+  // Exports carry the full content; untranslated replies get a notice line.
+  if (containsHanText(msg.content) && msg.role === 'assistant') {
+    return `_(Untranslated reply)_\n\n${msg.content}`;
   }
-  return msg.role === 'assistant'
-    ? 'This older reply was generated before English mode and has been hidden. Ask again and the agent will answer in English.'
-    : '[Non-English message hidden]';
+  return msg.content;
 };
 
 /**
