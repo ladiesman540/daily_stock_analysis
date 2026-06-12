@@ -4,6 +4,7 @@ import { BrowserRouter as Router, Navigate, Route, Routes, useLocation } from 'r
 import HomePage from './pages/HomePage';
 import TodayPage from './pages/TodayPage';
 import BacktestPage from './pages/BacktestPage';
+import ScorecardPage from './pages/ScorecardPage';
 import SettingsPage from './pages/SettingsPage';
 import LoginPage from './pages/LoginPage';
 import NotFoundPage from './pages/NotFoundPage';
@@ -82,6 +83,7 @@ const AppContent: React.FC = () => {
         <Route path="/sources" element={<SourcesPage />} />
         <Route path="/portfolio" element={<PortfolioPage />} />
         <Route path="/backtest" element={<BacktestPage />} />
+        <Route path="/scorecard" element={<ScorecardPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="*" element={<NotFoundPage />} />
       </Route>

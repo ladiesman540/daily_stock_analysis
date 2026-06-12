@@ -329,6 +329,9 @@ export interface DiscoveryConstituent {
   rs_top_decile?: boolean;
   volume_ratio?: number | null;
   unusual_volume?: boolean;
+  quiet_accum_volume_ratio?: number | null;
+  quiet_accumulation?: boolean;
+  beaten_down_reversal?: boolean;
   sector_symbol?: string | null;
   sector_tailwind?: boolean;
   composite_score?: number | null;
@@ -384,6 +387,87 @@ export interface DownDayRsResponse {
   warnings?: string[];
   summary?: string;
   generated_at?: string | null;
+}
+
+/** Per-population scorecard stats (real and simulated are NEVER merged). */
+export interface ScorecardPopulationStats {
+  flags: number;
+  hits: number;
+  flops: number;
+  expired: number;
+  open: number;
+  decided: number;
+  batting_average: number | null;
+  avg_days_to_hit: number | null;
+  avg_max_gain_pct: number | null;
+}
+
+/** Per-group stats for by_screen / by_score_band / by_month breakdowns. */
+export interface ScorecardGroupStats {
+  total: number;
+  open: number;
+  hit: number;
+  flop: number;
+  expired: number;
+  decided: number;
+  batting_average: number | null;
+}
+
+export interface ScorecardPopulationBlock {
+  /** Rows that passed >=1 screen or made the scored top-40 — the headline. */
+  flagged: ScorecardPopulationStats;
+  /** ALL liquidity-qualified rows — the control group the flags must beat. */
+  baseline: ScorecardPopulationStats;
+  /** flagged.batting_average - baseline.batting_average (null when either is null). */
+  edge: number | null;
+  by_screen: Record<string, ScorecardGroupStats>;
+  by_score_band: Record<string, ScorecardGroupStats>;
+  by_month: Record<string, ScorecardGroupStats>;
+}
+
+export interface ScorecardSummaryResponse {
+  status: 'completed' | 'missing' | string;
+  /** Only set when status is missing. */
+  summary?: string;
+  days?: number;
+  window_days?: number;
+  hit_threshold_pct?: number;
+  flop_threshold_pct?: number;
+  real?: ScorecardPopulationBlock;
+  simulated?: ScorecardPopulationBlock | null;
+  caveats?: string[];
+  generated_at?: string;
+}
+
+export interface ScorecardFlagRow {
+  id: number;
+  as_of: string | null;
+  symbol: string;
+  entry_close: number | null;
+  composite_score: number | null;
+  candidate_score: number | null;
+  /** Screen keys the flag passed, e.g. ["near_52w_high", "rs_top_decile"]. */
+  screens: string[];
+  simulated: boolean;
+  status: 'open' | 'hit' | 'flop' | 'expired' | string;
+  hit_date: string | null;
+  days_to_hit: number | null;
+  max_gain_pct: number | null;
+  current_return_pct: number | null;
+  last_eval_bar_date: string | null;
+  window_days: number | null;
+  hit_threshold_pct: number | null;
+  flop_threshold_pct: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface ScorecardFlagsResponse {
+  days: number;
+  limit: number;
+  offset: number;
+  total: number;
+  rows: ScorecardFlagRow[];
 }
 
 export interface CycleIndicator {
@@ -487,6 +571,30 @@ export interface DailyBriefResponse {
   headlines: DailyBriefFreshness & {
     top?: DailyBriefHeadline[];
   };
+  scorecard: DailyBriefFreshness & {
+    window_days?: number;
+    hit_threshold_pct?: number;
+    real?: DailyBriefScorecardPopulation;
+    simulated?: DailyBriefScorecardPopulation | null;
+  };
+}
+
+/** Slim per-population scorecard stats carried by the daily brief. */
+export interface DailyBriefScorecardPopulation {
+  flagged: {
+    flags?: number | null;
+    open?: number | null;
+    hits?: number | null;
+    decided?: number | null;
+    batting_average?: number | null;
+    avg_days_to_hit?: number | null;
+    avg_max_gain_pct?: number | null;
+  };
+  baseline: {
+    decided?: number | null;
+    batting_average?: number | null;
+  };
+  edge?: number | null;
 }
 
 export interface SparklinePoint {
@@ -554,6 +662,25 @@ export const researchApi = {
     const response = await apiClient.post<CycleSnapshotResponse>('/api/v1/research/free-data/cycle/run', undefined, {
       timeout: 240000,
     });
+    return response.data;
+  },
+  async getScorecard(params?: { days?: number; include_simulated?: boolean }): Promise<ScorecardSummaryResponse> {
+    const response = await apiClient.get<ScorecardSummaryResponse>('/api/v1/research/scorecard', { params });
+    return response.data;
+  },
+  async getScorecardFlags(params?: {
+    status?: 'open' | 'hit' | 'flop' | 'expired';
+    simulated?: boolean;
+    screen?: string;
+    days?: number;
+    limit?: number;
+    offset?: number;
+  }): Promise<ScorecardFlagsResponse> {
+    const response = await apiClient.get<ScorecardFlagsResponse>('/api/v1/research/scorecard/flags', { params });
+    return response.data;
+  },
+  async runScorecardBootstrap(): Promise<{ status: 'started' | 'already_running' | string }> {
+    const response = await apiClient.post<{ status: string }>('/api/v1/research/scorecard/bootstrap');
     return response.data;
   },
   async getXStatus(): Promise<XStatus> {

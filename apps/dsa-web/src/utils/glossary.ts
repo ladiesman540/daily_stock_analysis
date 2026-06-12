@@ -84,6 +84,16 @@ export const GLOSSARY: Record<string, GlossaryEntry> = {
     body: 'Flags stocks that rose on far heavier trading than usual - a sign that big buyers showed up.',
     computedFrom: 'An up day with volume >= 2x the prior 20-day average.',
   },
+  screen_quiet_accumulation: {
+    title: 'Quiet accumulation screen',
+    body: 'Flags stocks trading on sustained heavier-than-usual volume while the price barely moves - the footprint of a big buyer absorbing shares without chasing. A watch flag only; it does not affect the composite rank.',
+    computedFrom: 'Average volume over the last 5 sessions >= 1.5x the prior 20-session average, with the close within 3% of where it was 5 sessions ago (needs 26+ bars).',
+  },
+  screen_beaten_down_reversal: {
+    title: 'Beaten-down reversal screen',
+    body: 'Flags stocks down 40% or more from their 52-week high that are starting to turn: beating the market over the past month on above-average volume. A watch flag only; it does not affect the composite rank.',
+    computedFrom: 'Close <= 60% of the 252-day high, 1-month return above SPY (1M RS > 0), and latest volume >= 1.25x the prior 20-day average.',
+  },
   adv: {
     title: 'ADV (average dollar volume)',
     body: 'How much money changes hands in the stock on a typical day. The scans require at least $20M so a position can be bought and sold without moving the price.',
@@ -111,5 +121,11 @@ export const GLOSSARY: Record<string, GlossaryEntry> = {
   paper_portfolio: {
     title: 'Paper portfolio',
     body: 'A simulated portfolio that tracks trades with pretend money. It follows real market prices so you can judge the strategy without risking anything.',
+  },
+  hit_rate: {
+    title: 'Hit rate (batting average)',
+    body: 'Of everything the discovery screens flagged, the share that went on to gain +20% within 90 days. Flags still inside their window stay "open" and are not counted either way.',
+    computedFrom:
+      'hits / (hits + flops + expired). Hit: a close >= +20% within 90 calendar days of the flag; flop: a close <= -20% first; expired: the window (plus a 7-day slack) ended touching neither.',
   },
 };

@@ -37,7 +37,7 @@ describe('SidebarNav', () => {
     );
 
     expect(screen.getByTestId('chat-completion-badge')).toBeInTheDocument();
-    expect(screen.getByLabelText('问股有新消息')).toBeInTheDocument();
+    expect(screen.getByLabelText('Chat has a new message')).toBeInTheDocument();
 
     completionBadgeState.value = false;
     rerender(
@@ -62,6 +62,19 @@ describe('SidebarNav', () => {
     expect(screen.getByRole('button', { name: '切换主题(折叠)' })).toBeInTheDocument();
   });
 
+  it('renders the Scorecard nav item linking to /scorecard next to Backtest', () => {
+    render(
+      <MemoryRouter initialEntries={['/']}>
+        <SidebarNav />
+      </MemoryRouter>,
+    );
+
+    const scorecard = screen.getByRole('link', { name: 'Scorecard' });
+    expect(scorecard).toHaveAttribute('href', '/scorecard');
+    const labels = screen.getAllByRole('link').map((link) => link.getAttribute('aria-label'));
+    expect(labels.indexOf('Scorecard')).toBe(labels.indexOf('Backtest') + 1);
+  });
+
   it('opens the logout confirmation and confirms logout', async () => {
     render(
       <MemoryRouter initialEntries={['/chat']}>
@@ -69,10 +82,13 @@ describe('SidebarNav', () => {
       </MemoryRouter>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: '退出' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Log out' }));
 
-    expect(await screen.findByRole('heading', { name: '退出登录' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '确认退出' }));
+    expect(await screen.findByRole('heading', { name: 'Log out' })).toBeInTheDocument();
+    // Two "Log out" buttons exist now (sidebar + dialog confirm); the dialog
+    // is portaled to document.body, so the confirm button is the last one.
+    const buttons = screen.getAllByRole('button', { name: 'Log out' });
+    fireEvent.click(buttons[buttons.length - 1]);
     expect(mockLogout).toHaveBeenCalled();
   });
 });

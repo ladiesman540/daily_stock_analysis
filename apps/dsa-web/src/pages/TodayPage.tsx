@@ -294,6 +294,13 @@ const TodayPage: React.FC = () => {
   const discovery = brief?.discovery;
   const downDay = brief?.down_day_rs;
   const headlines = brief?.headlines;
+  const scorecard = brief?.scorecard;
+  const scorecardFlagged = scorecard?.real?.flagged;
+  const scorecardBaseline = scorecard?.real?.baseline;
+  const scorecardDecided = scorecardFlagged?.decided ?? 0;
+  const scorecardWindow = scorecard?.window_days ?? 90;
+  const scorecardHitPct = scorecard?.hit_threshold_pct ?? 20;
+  const scorecardSim = scorecard?.simulated?.flagged;
   // Prominent only when the snapshot covers the latest market session AND it was a down day.
   const downDayActive = Boolean(
     downDay?.status === 'completed' && downDay.triggered && downDay.is_latest_session,
@@ -837,8 +844,58 @@ const TodayPage: React.FC = () => {
           )}
         </Card>
 
+        <BriefCard
+          eyebrow="9 · Scorecard"
+          title="Is the system any good?"
+          to="/scorecard"
+          loading={loading}
+          section={scorecard}
+          missingText="No graded flags yet — the scorecard fills in automatically with the nightly update (6:00 PM)."
+        >
+          <div className="space-y-2 text-sm">
+            {scorecardDecided > 0 ? (
+              <>
+                <p className="text-foreground">
+                  <InfoTip term="hit_rate">
+                    <span className="text-2xl font-semibold tabular-nums">
+                      {scorecardFlagged?.batting_average != null
+                        ? `${(scorecardFlagged.batting_average * 100).toFixed(0)}%`
+                        : 'N/A'}
+                    </span>
+                  </InfoTip>
+                  {' '}
+                  <span className="text-secondary-text">
+                    of decided flags hit +{scorecardHitPct.toFixed(0)}% within {scorecardWindow} days
+                    {' '}({scorecardFlagged?.hits ?? 0} of {scorecardDecided}; {scorecardFlagged?.open ?? 0} still open)
+                  </span>
+                </p>
+                {scorecardFlagged?.batting_average != null && scorecardBaseline?.batting_average != null ? (
+                  <p className="text-xs text-secondary-text">
+                    Flags {(scorecardFlagged.batting_average * 100).toFixed(0)}%
+                    {' · '}Universe baseline {(scorecardBaseline.batting_average * 100).toFixed(0)}%
+                    {' · '}Edge {(scorecard?.real?.edge ?? 0) >= 0 ? '+' : ''}
+                    {((scorecard?.real?.edge ?? 0) * 100).toFixed(0)}pts
+                  </p>
+                ) : null}
+              </>
+            ) : (
+              <>
+                <p className="text-secondary-text">
+                  {scorecardFlagged?.open ?? 0} flags open — outcomes mature over the next {scorecardWindow} days.
+                </p>
+                {scorecardSim?.batting_average != null ? (
+                  <p className="text-xs text-secondary-text">
+                    Simulated backtest: {(scorecardSim.batting_average * 100).toFixed(0)}% — an optimistic ceiling
+                    (delisted losers are missing).
+                  </p>
+                ) : null}
+              </>
+            )}
+          </div>
+        </BriefCard>
+
         <Card padding="md">
-          <DashboardPanelHeader eyebrow="9 · Ask" title="Ask about today" />
+          <DashboardPanelHeader eyebrow="10 · Ask" title="Ask about today" />
           <div className="flex flex-wrap items-end gap-2">
             <div className="min-w-0 flex-1">
               <Input
