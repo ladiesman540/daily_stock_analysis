@@ -254,6 +254,25 @@ const TodayPage: React.FC = () => {
     void load();
   }, [load]);
 
+  // An already-open tab (especially a restored mobile tab) never refetches on
+  // its own; reload the brief whenever the tab regains focus, throttled so
+  // rapid tab-switching doesn't hammer the API.
+  useEffect(() => {
+    let lastAutoLoad = Date.now();
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() - lastAutoLoad < 60_000) return;
+      lastAutoLoad = Date.now();
+      void load();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [load]);
+
   const addToWatchlist = useCallback(async (symbol: string) => {
     setWatchlistAdds((prev) => ({ ...prev, [symbol]: 'adding' }));
     try {
