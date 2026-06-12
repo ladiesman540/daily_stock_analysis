@@ -778,6 +778,7 @@ def _snapshot_pipeline_task() -> None:
         logger.warning("Snapshot due-check failed (treating as not due): %s", exc)
         due = False
     if not due:
+        _intraday_market_refresh()
         _catch_up_news_scoring()
         _intraday_threshold_alerts()
         return
@@ -786,6 +787,60 @@ def _snapshot_pipeline_task() -> None:
         _run_snapshot_pipeline()
     except Exception as exc:
         logger.warning("Routine snapshot pipeline aborted: %s", exc)
+
+
+def _in_us_market_window() -> bool:
+    """Roughly inside the US cash session in container-local time.
+
+    A generous 06:00-14:00 Mon-Fri local window covers the 09:30-16:00 ET
+    session from America/Phoenix (UTC-7 year-round) under both EST and EDT.
+    Deployments in other timezones can simply disable the refresh.
+    """
+    from datetime import datetime as dt
+
+    now = dt.now()
+    return now.weekday() < 5 and 6 <= now.hour < 14
+
+
+def _intraday_market_refresh() -> None:
+    """Keep the cheap market data fresh between daily pipeline runs.
+
+    Regime (a couple dozen ETF quotes + VIX) and the paper-portfolio mark
+    refresh on every 30-minute tick inside market hours; sector rotation
+    (51 ETF bar fetches, ~1 min) refreshes when its snapshot is older than
+    an hour. The heavy steps (discovery, analysis, scorecard) stay on the
+    daily schedule by design — free-tier rate limits make them a ~10 minute
+    crawl. Entirely fail-open."""
+    if os.getenv("INTRADAY_REFRESH_ENABLED", "true").strip().lower() in ("0", "false", "no", "off"):
+        return
+    try:
+        if not _in_us_market_window():
+            return
+        from scripts.daily_snapshot import STEP_RUNNERS
+
+        for step in ("regime", "portfolio"):
+            try:
+                STEP_RUNNERS[step]({})
+            except Exception as exc:
+                logger.warning("Intraday %s refresh failed (skipped): %s", step, exc)
+        try:
+            from datetime import datetime as dt
+
+            from src.storage import DatabaseManager
+
+            rotation = DatabaseManager.get_instance().get_latest_sector_rotation_snapshot()
+            generated = str((rotation or {}).get("generated_at") or "")
+            stale = True
+            if generated:
+                age = (dt.now() - dt.fromisoformat(generated[:19])).total_seconds()
+                stale = age >= 3600
+            if stale:
+                STEP_RUNNERS["rotation"]({})
+        except Exception as exc:
+            logger.warning("Intraday rotation refresh failed (skipped): %s", exc)
+        logger.info("Intraday market refresh done")
+    except Exception as exc:
+        logger.warning("Intraday market refresh aborted: %s", exc)
 
 
 def _catch_up_news_scoring() -> None:

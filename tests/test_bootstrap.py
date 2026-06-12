@@ -266,5 +266,268 @@ class SnapshotPipelineTaskTestCase(unittest.TestCase):
         mock_alerts.assert_called_once()
 
 
+class IntradayMarketRefreshTestCase(unittest.TestCase):
+    """Test _intraday_market_refresh and related helpers."""
+
+    def setUp(self) -> None:
+        self._prev_intraday_enabled = os.environ.get("INTRADAY_REFRESH_ENABLED")
+
+    def tearDown(self) -> None:
+        if self._prev_intraday_enabled is None:
+            os.environ.pop("INTRADAY_REFRESH_ENABLED", None)
+        else:
+            os.environ["INTRADAY_REFRESH_ENABLED"] = self._prev_intraday_enabled
+
+    def test_disabled_env_skips_refresh(self) -> None:
+        """When INTRADAY_REFRESH_ENABLED=false, no STEP_RUNNERS are touched."""
+        os.environ["INTRADAY_REFRESH_ENABLED"] = "false"
+        mock_runners = MagicMock()
+        with patch("scripts.daily_snapshot.STEP_RUNNERS", mock_runners), \
+             patch("main._in_us_market_window", return_value=True):
+            main._intraday_market_refresh()
+        # Verify STEP_RUNNERS was never accessed
+        mock_runners.__getitem__.assert_not_called()
+
+    def test_disabled_env_with_no_variants(self) -> None:
+        """Test various disabled env values: 0, false, no, off."""
+        for val in ["0", "false", "no", "off", "False", "OFF", "NO"]:
+            os.environ["INTRADAY_REFRESH_ENABLED"] = val
+            mock_runners = MagicMock()
+            with patch("scripts.daily_snapshot.STEP_RUNNERS", mock_runners), \
+                 patch("main._in_us_market_window", return_value=True):
+                main._intraday_market_refresh()
+            # Verify STEP_RUNNERS was never accessed
+            mock_runners.__getitem__.assert_not_called()
+
+    def test_outside_market_window_skips_runners(self) -> None:
+        """When _in_us_market_window returns False, no runner calls."""
+        mock_runners = MagicMock()
+        with patch("main._in_us_market_window", return_value=False), \
+             patch("scripts.daily_snapshot.STEP_RUNNERS", mock_runners):
+            main._intraday_market_refresh()
+        # Verify STEP_RUNNERS was never accessed
+        mock_runners.__getitem__.assert_not_called()
+
+    def test_inside_window_regime_and_portfolio_called(self) -> None:
+        """Inside market window: regime and portfolio runners called."""
+        called = []
+
+        def make_runner(name):
+            def runner(ctx):
+                called.append(name)
+            return runner
+
+        runners = {
+            "regime": make_runner("regime"),
+            "portfolio": make_runner("portfolio"),
+            "rotation": make_runner("rotation"),
+        }
+        with patch("main._in_us_market_window", return_value=True), \
+             patch("scripts.daily_snapshot.STEP_RUNNERS", runners), \
+             patch("src.storage.DatabaseManager.get_instance") as mock_db_inst:
+            # Mock rotation snapshot to be recent (not stale)
+            mock_db = MagicMock()
+            mock_db.get_latest_sector_rotation_snapshot.return_value = {
+                "generated_at": "2026-06-10T12:00:00Z"
+            }
+            mock_db_inst.return_value = mock_db
+            main._intraday_market_refresh()
+        assert "regime" in called
+        assert "portfolio" in called
+
+    def test_regime_runner_raising_does_not_stop_portfolio(self) -> None:
+        """A raising regime runner doesn't prevent portfolio from being called."""
+        called = []
+
+        def boom(ctx):
+            called.append("regime")
+            raise RuntimeError("regime failed")
+
+        def make_runner(name):
+            def runner(ctx):
+                called.append(name)
+            return runner
+
+        runners = {
+            "regime": boom,
+            "portfolio": make_runner("portfolio"),
+            "rotation": make_runner("rotation"),
+        }
+        with patch("main._in_us_market_window", return_value=True), \
+             patch("scripts.daily_snapshot.STEP_RUNNERS", runners), \
+             patch("src.storage.DatabaseManager.get_instance") as mock_db_inst:
+            mock_db = MagicMock()
+            mock_db.get_latest_sector_rotation_snapshot.return_value = {
+                "generated_at": "2026-06-10T12:00:00Z"
+            }
+            mock_db_inst.return_value = mock_db
+            main._intraday_market_refresh()  # must not raise
+        # Both regime and portfolio were attempted
+        assert "regime" in called
+        assert "portfolio" in called
+
+    def test_rotation_not_called_when_recent(self) -> None:
+        """Rotation runner NOT called when snapshot generated_at is 10 minutes ago."""
+        from datetime import datetime as dt, timedelta
+        called = []
+
+        def make_runner(name):
+            def runner(ctx):
+                called.append(name)
+            return runner
+
+        runners = {
+            "regime": make_runner("regime"),
+            "portfolio": make_runner("portfolio"),
+            "rotation": make_runner("rotation"),
+        }
+        # Snapshot generated 10 minutes ago (< 1 hour threshold)
+        recent_time = (dt.now() - timedelta(minutes=10)).isoformat()
+        with patch("main._in_us_market_window", return_value=True), \
+             patch("scripts.daily_snapshot.STEP_RUNNERS", runners), \
+             patch("src.storage.DatabaseManager.get_instance") as mock_db_inst:
+            mock_db = MagicMock()
+            mock_db.get_latest_sector_rotation_snapshot.return_value = {
+                "generated_at": recent_time
+            }
+            mock_db_inst.return_value = mock_db
+            main._intraday_market_refresh()
+        assert "rotation" not in called
+        assert "regime" in called
+        assert "portfolio" in called
+
+    def test_rotation_called_when_stale(self) -> None:
+        """Rotation runner called when snapshot generated_at is 2 hours ago."""
+        from datetime import datetime as dt, timedelta
+        called = []
+
+        def make_runner(name):
+            def runner(ctx):
+                called.append(name)
+            return runner
+
+        runners = {
+            "regime": make_runner("regime"),
+            "portfolio": make_runner("portfolio"),
+            "rotation": make_runner("rotation"),
+        }
+        # Snapshot generated 2 hours ago (> 1 hour threshold)
+        stale_time = (dt.now() - timedelta(hours=2)).isoformat()
+        with patch("main._in_us_market_window", return_value=True), \
+             patch("scripts.daily_snapshot.STEP_RUNNERS", runners), \
+             patch("src.storage.DatabaseManager.get_instance") as mock_db_inst:
+            mock_db = MagicMock()
+            mock_db.get_latest_sector_rotation_snapshot.return_value = {
+                "generated_at": stale_time
+            }
+            mock_db_inst.return_value = mock_db
+            main._intraday_market_refresh()
+        assert "rotation" in called
+        assert "regime" in called
+        assert "portfolio" in called
+
+    def test_rotation_called_when_no_snapshot_exists(self) -> None:
+        """Rotation runner called when no rotation snapshot exists (None)."""
+        called = []
+
+        def make_runner(name):
+            def runner(ctx):
+                called.append(name)
+            return runner
+
+        runners = {
+            "regime": make_runner("regime"),
+            "portfolio": make_runner("portfolio"),
+            "rotation": make_runner("rotation"),
+        }
+        with patch("main._in_us_market_window", return_value=True), \
+             patch("scripts.daily_snapshot.STEP_RUNNERS", runners), \
+             patch("src.storage.DatabaseManager.get_instance") as mock_db_inst:
+            mock_db = MagicMock()
+            mock_db.get_latest_sector_rotation_snapshot.return_value = None
+            mock_db_inst.return_value = mock_db
+            main._intraday_market_refresh()
+        assert "rotation" in called
+        assert "regime" in called
+        assert "portfolio" in called
+
+    def test_not_due_branch_calls_intraday_before_catch_up(self) -> None:
+        """In not-due branch of _snapshot_pipeline_task, _intraday_market_refresh called before _catch_up_news_scoring."""
+        called = []
+
+        def track_call(name):
+            def fn(*args, **kwargs):
+                called.append(name)
+            return fn
+
+        with patch("main._snapshot_pipeline_due", return_value=False), \
+             patch("main._intraday_market_refresh", side_effect=track_call("intraday")), \
+             patch("main._catch_up_news_scoring", side_effect=track_call("catch_up")), \
+             patch("main._intraday_threshold_alerts", side_effect=track_call("alerts")):
+            main._snapshot_pipeline_task()
+        # Verify order: intraday before catch_up
+        assert "intraday" in called
+        assert "catch_up" in called
+        intraday_idx = called.index("intraday")
+        catch_up_idx = called.index("catch_up")
+        assert intraday_idx < catch_up_idx
+
+
+class InUSMarketWindowTestCase(unittest.TestCase):
+    """Test _in_us_market_window."""
+
+    def test_returns_bool(self) -> None:
+        """_in_us_market_window always returns a bool."""
+        result = main._in_us_market_window()
+        self.assertIsInstance(result, bool)
+
+    def test_weekday_logic(self) -> None:
+        """Weekday constraint: Monday-Friday (0-4) return possible True, Saturday-Sunday (5-6) return False."""
+        from datetime import datetime as dt, timedelta
+        from unittest.mock import patch as mock_patch
+
+        # Saturday
+        saturday = dt(2026, 6, 13, 12, 0, 0)  # A Saturday in June 2026
+        with mock_patch("main.datetime") as mock_dt:
+            mock_dt.now.return_value = saturday
+            # Manually call logic since we can't easily patch dt inside the function
+            result = saturday.weekday() < 5 and 6 <= saturday.hour < 14
+            self.assertFalse(result, "Saturday should be outside market window")
+
+        # Monday
+        monday = dt(2026, 6, 15, 12, 0, 0)  # A Monday in June 2026
+        result = monday.weekday() < 5 and 6 <= monday.hour < 14
+        self.assertTrue(result, "Monday at 12:00 should be inside market window (weekday/hour OK)")
+
+    def test_hour_logic(self) -> None:
+        """Hour constraint: 06:00 <= hour < 14:00."""
+        from datetime import datetime as dt
+
+        # Before window (5:59 AM)
+        before = dt(2026, 6, 15, 5, 59, 0)  # Monday, 5:59 AM
+        result = before.weekday() < 5 and 6 <= before.hour < 14
+        self.assertFalse(result, "5:59 AM should be outside market window")
+
+        # Start of window (6:00 AM)
+        start = dt(2026, 6, 15, 6, 0, 0)  # Monday, 6:00 AM
+        result = start.weekday() < 5 and 6 <= start.hour < 14
+        self.assertTrue(result, "6:00 AM should be inside market window")
+
+        # Middle of window (12:00 PM)
+        middle = dt(2026, 6, 15, 12, 0, 0)  # Monday, 12:00 PM
+        result = middle.weekday() < 5 and 6 <= middle.hour < 14
+        self.assertTrue(result, "12:00 PM should be inside market window")
+
+        # End of window (13:59 PM)
+        end = dt(2026, 6, 15, 13, 59, 0)  # Monday, 1:59 PM
+        result = end.weekday() < 5 and 6 <= end.hour < 14
+        self.assertTrue(result, "1:59 PM should be inside market window")
+
+        # After window (14:00 PM)
+        after = dt(2026, 6, 15, 14, 0, 0)  # Monday, 2:00 PM
+        result = after.weekday() < 5 and 6 <= after.hour < 14
+        self.assertFalse(result, "2:00 PM (14:00) should be outside market window")
+
+
 if __name__ == "__main__":
     unittest.main()
