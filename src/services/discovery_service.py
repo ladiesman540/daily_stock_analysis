@@ -6,7 +6,9 @@ names that are NOT already on the watchlist: new/near 52-week highs, top-decile
 relative strength vs SPY, unusual volume on up days, plus a sector-tailwind
 bonus from the persisted rotation snapshot. Candidates are ranked by composite
 percentile and the top ideas are run through the same GrindingLeaderScorer the
-Signals page uses, so both surfaces speak the same checklist language.
+Signals page uses, so both surfaces speak the same checklist language. Two
+independent watch flags — quiet accumulation and beaten-down reversal — ride
+along on every row but never enter the momentum composite.
 
 All bars come through FreeDataService._fetch_histories (fail-open, writes
 through to the stock_daily cache), so re-runs on the same day are cheap.
@@ -51,6 +53,22 @@ RS_TOP_DECILE_PERCENTILE = 0.90
 SECTOR_BONUS = 0.05
 SECTOR_CORRELATION_MIN = 0.40
 SCORED_TOP_N = 40
+
+# Independent watch flags (NEVER part of the momentum composite — a deep-
+# drawdown name scoring on a momentum composite would be incoherent).
+# Quiet accumulation: avg volume over the last QUIET_ACCUM_WINDOW sessions vs
+# the prior 4*window sessions (window 5 -> baseline vol[-25:-5]), while the
+# close moved no more than QUIET_ACCUM_MAX_ABS_CHG_PCT over the window.
+# Requires window*5 + 1 bars (26 by default). A single 2x day is noise
+# (that's unusual_volume); a week of >=1.5x volume on a flat price is absorption.
+QUIET_ACCUM_VOL_RATIO = 1.5
+QUIET_ACCUM_WINDOW = 5
+QUIET_ACCUM_MAX_ABS_CHG_PCT = 3.0
+# Beaten-down reversal: 40%+ off the 52-week high (turnaround territory) with
+# the earliest turn evidence — positive 1M RS vs SPY on above-average volume.
+REVERSAL_MAX_PCT_OF_HIGH = 0.60
+REVERSAL_MIN_RS_1M = 0.0
+REVERSAL_MIN_VOLUME_RATIO = 1.25
 
 # Down-day relative-strength screen (runs inside the discovery step, zero extra fetches).
 DEFAULT_DOWN_DAY_THRESHOLD_PCT = -0.75
@@ -135,7 +153,14 @@ class DiscoveryService:
         qualified.sort(key=lambda row: -(row.get("composite_score") or 0.0))
         for index, row in enumerate(qualified):
             row["rank"] = index + 1
-        self._attach_candidate_scores(qualified[:SCORED_TOP_N], histories, benchmark_perf_3m=spy_perf_3m)
+        # Score the union of the composite top-N and any new-screen flagged
+        # row, so flagged names carry the checklist language even when their
+        # momentum composite ranks them low.
+        scored_rows = qualified[:SCORED_TOP_N] + [
+            row for row in qualified[SCORED_TOP_N:]
+            if row.get("quiet_accumulation") or row.get("beaten_down_reversal")
+        ]
+        self._attach_candidate_scores(scored_rows, histories, benchmark_perf_3m=spy_perf_3m)
         for row in qualified:
             row["reason"] = _reason(row)
 
@@ -517,6 +542,40 @@ def _screen_row(
     up_day = bool(len(closes) >= 2 and closes[-1] > closes[-2])
     unusual_volume = bool(up_day and volume_ratio is not None and volume_ratio >= UNUSUAL_VOLUME_RATIO)
 
+    # Quiet accumulation (independent watch flag): sustained volume lift on a
+    # flat price. With the default window of 5 the baseline is vol[-25:-5] and
+    # 26 bars are required (window*5 for the two volume averages, plus the
+    # close one session before the window for the flat-price check).
+    qa_window = max(1, _env_int("QUIET_ACCUM_WINDOW", QUIET_ACCUM_WINDOW))
+    qa_span = qa_window * 5
+    quiet_accum_volume_ratio: Optional[float] = None
+    quiet_price_chg_pct: Optional[float] = None
+    if len(bars) >= qa_span + 1:
+        baseline_volumes = volumes[-qa_span:-qa_window]
+        baseline_avg = sum(baseline_volumes) / len(baseline_volumes)
+        if baseline_avg > 0:
+            quiet_accum_volume_ratio = (sum(volumes[-qa_window:]) / qa_window) / baseline_avg
+        window_ago_close = closes[-qa_window - 1]
+        if window_ago_close:
+            quiet_price_chg_pct = abs(closes[-1] / window_ago_close - 1.0) * 100
+    quiet_accumulation = bool(
+        quiet_accum_volume_ratio is not None
+        and quiet_accum_volume_ratio >= _env_float("QUIET_ACCUM_VOL_RATIO", QUIET_ACCUM_VOL_RATIO)
+        and quiet_price_chg_pct is not None
+        and quiet_price_chg_pct <= _env_float("QUIET_ACCUM_MAX_ABS_CHG_PCT", QUIET_ACCUM_MAX_ABS_CHG_PCT)
+    )
+
+    # Beaten-down reversal (independent watch flag): deep drawdown with the
+    # earliest turn evidence — positive 1M RS vs SPY on above-average volume.
+    beaten_down_reversal = bool(
+        pct_of_52w_high is not None
+        and pct_of_52w_high <= _env_float("REVERSAL_MAX_PCT_OF_HIGH", REVERSAL_MAX_PCT_OF_HIGH)
+        and rs_1m_pct is not None
+        and rs_1m_pct > _env_float("REVERSAL_MIN_RS_1M", REVERSAL_MIN_RS_1M)
+        and volume_ratio is not None
+        and volume_ratio >= _env_float("REVERSAL_MIN_VOLUME_RATIO", REVERSAL_MIN_VOLUME_RATIO)
+    )
+
     return {
         "symbol": symbol,
         "name": payload.get("name") or symbol,
@@ -534,6 +593,11 @@ def _screen_row(
         "volume_ratio": round(volume_ratio, 2) if volume_ratio is not None else None,
         "up_day": up_day,
         "unusual_volume": unusual_volume,
+        "quiet_accum_volume_ratio": (
+            round(quiet_accum_volume_ratio, 2) if quiet_accum_volume_ratio is not None else None
+        ),
+        "quiet_accumulation": quiet_accumulation,
+        "beaten_down_reversal": beaten_down_reversal,
     }
 
 
@@ -600,6 +664,20 @@ def _reason(row: Dict[str, Any]) -> str:
     if row.get("unusual_volume"):
         ratio = row.get("volume_ratio")
         parts.append((f"{ratio:.1f}x" if ratio is not None else "unusual") + " average volume on an up day")
+    if row.get("quiet_accumulation"):
+        ratio = row.get("quiet_accum_volume_ratio")
+        parts.append(
+            "quiet accumulation ("
+            + (f"{ratio:.1f}x" if ratio is not None else "elevated")
+            + " average volume this week on a flat price)"
+        )
+    if row.get("beaten_down_reversal"):
+        pct = row.get("pct_of_52w_high")
+        parts.append(
+            "beaten-down reversal setup"
+            + (f" ({pct * 100:.0f}% of its 52-week high" if pct is not None else " (deep drawdown")
+            + ", RS turning positive on volume)"
+        )
     if row.get("sector_tailwind"):
         parts.append(f"rising sector tailwind ({row.get('sector_symbol')})")
     return "; ".join(parts) if parts else "ranked by composite trend/RS/volume strength"

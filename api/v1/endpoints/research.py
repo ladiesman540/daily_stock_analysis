@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from datetime import date, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -305,6 +306,105 @@ def get_down_day_rs_latest() -> Dict[str, Any]:
     except Exception as exc:
         logger.error("Down-day RS latest failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail={"error": "down_day_rs_latest_failed", "message": str(exc)})
+
+
+@router.get("/scorecard")
+def get_scorecard(
+    days: int = Query(400, ge=1, le=1000),
+    include_simulated: bool = Query(True),
+) -> Dict[str, Any]:
+    """Hit-rate scorecard summary; real and simulated flag stats are never merged.
+
+    Each population block splits into "flagged" (headline: passed >=1 screen or
+    made the scored top-40) and "baseline" (all liquidity-qualified rows, the
+    control group), plus an "edge" delta between their batting averages.
+    """
+    try:
+        from src.services.scorecard_service import ScorecardService
+
+        summary = ScorecardService().build_summary(days=days, include_simulated=include_simulated)
+        real_total = ((summary.get("real") or {}).get("baseline") or {}).get("flags") or 0
+        sim_total = ((summary.get("simulated") or {}).get("baseline") or {}).get("flags") or 0
+        if not real_total and not sim_total:
+            return {
+                "status": "missing",
+                "summary": "No discovery flags graded yet. Run the daily snapshot job (scorecard step).",
+            }
+        return {"status": "completed", **summary}
+    except Exception as exc:
+        logger.error("Scorecard summary failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail={"error": "scorecard_failed", "message": str(exc)})
+
+
+@router.get("/scorecard/flags")
+def get_scorecard_flags(
+    status: Optional[str] = Query(None, pattern="^(open|hit|flop|expired)$"),
+    simulated: Optional[bool] = Query(None),
+    screen: Optional[str] = Query(None, min_length=1, max_length=64, pattern="^[a-z0-9_]+$"),
+    days: int = Query(400, ge=1, le=1000),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> Dict[str, Any]:
+    """Filtered scorecard flag rows, newest first, with pagination."""
+    try:
+        from src.storage import DatabaseManager
+
+        payload = DatabaseManager.get_instance().get_discovery_flag_outcomes(
+            status=status, simulated=simulated, screen=screen,
+            days=days, limit=limit, offset=offset,
+        )
+        return {"days": days, "limit": limit, "offset": offset, **payload}
+    except Exception as exc:
+        logger.error("Scorecard flags failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail={"error": "scorecard_flags_failed", "message": str(exc)})
+
+
+@router.post("/scorecard/run")
+def run_scorecard_evaluation() -> Dict[str, Any]:
+    """Seed + evaluate discovery flags now (same work as the pipeline scorecard step)."""
+    try:
+        from src.services.scorecard_service import ScorecardService
+
+        return {"status": "completed", **ScorecardService().run_daily_evaluation()}
+    except Exception as exc:
+        logger.error("Scorecard run failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail={"error": "scorecard_run_failed", "message": str(exc)})
+
+
+# One bootstrap at a time per process: acquired by the request thread, released
+# by the worker thread when the (10-15 min) simulation finishes or fails.
+_bootstrap_lock = threading.Lock()
+
+
+@router.post("/scorecard/bootstrap")
+def run_scorecard_bootstrap() -> Dict[str, Any]:
+    """Kick off the one-time simulated-history bootstrap in a background thread.
+
+    Returns immediately: {"status": "started"} or {"status": "already_running"}.
+    Results land in discovery_flag_outcomes with simulated=True; progress and
+    failures are logged (fail-open, nothing else is affected).
+    """
+    if not _bootstrap_lock.acquire(blocking=False):
+        return {"status": "already_running"}
+
+    def _worker() -> None:
+        try:
+            from src.services.scorecard_service import ScorecardService
+
+            result = ScorecardService().run_bootstrap()
+            logger.info("Scorecard bootstrap finished: %s", result)
+        except Exception as exc:
+            logger.error("Scorecard bootstrap failed: %s", exc, exc_info=True)
+        finally:
+            _bootstrap_lock.release()
+
+    try:
+        threading.Thread(target=_worker, name="scorecard-bootstrap", daemon=True).start()
+    except Exception:
+        # Thread never started, so _worker's finally can't release the lock.
+        _bootstrap_lock.release()
+        raise
+    return {"status": "started"}
 
 
 @router.get("/free-data/cycle/latest")

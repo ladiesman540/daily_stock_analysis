@@ -221,6 +221,90 @@ class TestCollectBriefSeeded(unittest.TestCase):
             stale_db_dir.cleanup()
 
 
+class TestScorecardBriefSection(unittest.TestCase):
+    """Brief 'scorecard' key: slim shape, real/sim separation, digest byte-parity."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = _make_db(self.tmp.name)
+        _seed_all(self.db)
+        self.service = _make_service(self.tmp.name)
+
+    def tearDown(self) -> None:
+        DatabaseManager.reset_instance()
+        Config.reset_instance()
+        os.environ.pop("DATABASE_PATH", None)
+        self.tmp.cleanup()
+
+    def _seed_outcomes(self) -> None:
+        today = date.today()
+        old = (today - timedelta(days=40)).isoformat()
+        latest = (today - timedelta(days=3)).isoformat()
+
+        def row(symbol, as_of, status, *, screens, candidate_score=70.0, **extra):
+            base = {
+                "as_of": as_of, "symbol": symbol, "entry_close": 100.0,
+                "composite_score": 92.0, "candidate_score": candidate_score,
+                "screens": screens, "simulated": False, "status": status,
+            }
+            base.update(extra)
+            return base
+
+        self.db.upsert_discovery_flag_outcomes([
+            # Flagged real rows: 2 hits, 1 flop, 1 open -> batting 2/3.
+            row("AAA", old, "hit", screens=["near_52w_high"], days_to_hit=12, max_gain_pct=25.0),
+            row("BBB", old, "hit", screens=["rs_top_decile"], days_to_hit=30, max_gain_pct=31.0),
+            row("CCC", old, "flop", screens=["unusual_volume"], max_gain_pct=4.0),
+            row("DDD", latest, "open", screens=["near_52w_high"]),
+            # Baseline-only real row (no screens, no candidate_score): flop.
+            row("EEE", old, "flop", screens=[], candidate_score=None),
+            # Simulated row: must never leak into the real stats.
+            row("SIM", old, "hit", screens=["near_52w_high"], simulated=True, days_to_hit=5),
+        ])
+
+    def test_missing_without_outcome_rows(self) -> None:
+        section = self.service.collect_brief()["scorecard"]
+        self.assertEqual(section["status"], "missing")
+        for key in FRESHNESS_KEYS:
+            self.assertIn(key, section)
+        self.assertEqual(section["freshness"], "unknown")
+
+    def test_completed_shape_and_separation(self) -> None:
+        self._seed_outcomes()
+        section = self.service.collect_brief()["scorecard"]
+        self.assertEqual(section["status"], "completed")
+        # as_of = latest REAL flag's as_of date (3 days old -> fresh).
+        self.assertEqual(section["as_of"], (date.today() - timedelta(days=3)).isoformat())
+        self.assertEqual(section["age_days"], 3)
+        self.assertEqual(section["freshness"], "fresh")
+
+        flagged = section["real"]["flagged"]
+        self.assertEqual(flagged["flags"], 4)
+        self.assertEqual(flagged["hits"], 2)
+        self.assertEqual(flagged["decided"], 3)
+        self.assertEqual(flagged["open"], 1)
+        self.assertEqual(flagged["batting_average"], round(2 / 3, 4))
+        self.assertEqual(flagged["avg_days_to_hit"], 21.0)
+        baseline = section["real"]["baseline"]
+        self.assertEqual(baseline["decided"], 4)
+        self.assertEqual(baseline["batting_average"], 0.5)
+        self.assertEqual(section["real"]["edge"], round(2 / 3 - 0.5, 4))
+        # Simulated block present, separate, and not merged into real.
+        self.assertEqual(section["simulated"]["flagged"]["hits"], 1)
+        self.assertEqual(section["simulated"]["flagged"]["batting_average"], 1.0)
+        # Slim payload: breakdowns stay on the /scorecard endpoint only.
+        self.assertNotIn("by_screen", section["real"])
+
+    def test_digest_byte_parity_and_no_scorecard_text(self) -> None:
+        before = self.service.build_digest()
+        self._seed_outcomes()
+        after = self.service.build_digest()
+        self.assertEqual(before, after)
+        self.assertNotIn("Scorecard", after)
+        self.assertNotIn("scorecard", after)
+        self.assertNotIn("batting", after.lower())
+
+
 class TestDailyBriefApi(unittest.TestCase):
     """Integration test hitting GET /api/v1/research/free-data/daily-brief via TestClient."""
 

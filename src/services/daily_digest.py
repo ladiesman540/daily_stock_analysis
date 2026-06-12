@@ -42,6 +42,33 @@ def _apply_freshness(payload: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 
+def _slim_scorecard_population(block: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Brief-sized {flagged, baseline, edge} cut of a scorecard population block.
+
+    Drops the by_screen/by_score_band/by_month breakdowns (the /scorecard page
+    fetches the full summary itself) and keeps only what the Today card shows.
+    """
+    block = block or {}
+    flagged = block.get("flagged") or {}
+    baseline = block.get("baseline") or {}
+    return {
+        "flagged": {
+            "flags": flagged.get("flags"),
+            "open": flagged.get("open"),
+            "hits": flagged.get("hits"),
+            "decided": flagged.get("decided"),
+            "batting_average": flagged.get("batting_average"),
+            "avg_days_to_hit": flagged.get("avg_days_to_hit"),
+            "avg_max_gain_pct": flagged.get("avg_max_gain_pct"),
+        },
+        "baseline": {
+            "decided": baseline.get("decided"),
+            "batting_average": baseline.get("batting_average"),
+        },
+        "edge": block.get("edge"),
+    }
+
+
 def _is_latest_us_session(as_of: Any) -> bool:
     """True when an as-of date is the most recent expected US trading session."""
     if not as_of:
@@ -52,6 +79,27 @@ def _is_latest_us_session(as_of: Any) -> bool:
         return datetime.fromisoformat(str(as_of)[:10]).date() >= _latest_expected_us_bar_date()
     except Exception:
         return False
+
+
+def _prune_dated_state(state: Dict[str, Any], *, max_age_days: int = 60) -> None:
+    """Drop per-symbol dedup entries (symbol -> ISO date) older than the window.
+
+    Keeps data/alert_state.json from growing forever as symbols rotate through
+    the discovery/watchlist alert checks. Scalar state keys are untouched.
+    """
+    cutoff = date.today() - timedelta(days=max_age_days)
+    for key in ("discovery_high_conviction_on", "watchlist_mover_on"):
+        entries = state.get(key)
+        if not isinstance(entries, dict):
+            continue
+        kept: Dict[str, Any] = {}
+        for symbol, stamp in entries.items():
+            try:
+                if datetime.fromisoformat(str(stamp)[:10]).date() >= cutoff:
+                    kept[symbol] = stamp
+            except ValueError:
+                continue
+        state[key] = kept
 
 
 class DailyDigestService:
@@ -110,6 +158,7 @@ class DailyDigestService:
             "discovery": self._collect_discovery(),
             "down_day_rs": self._collect_down_day(),
             "headlines": self._collect_headlines(),
+            "scorecard": self._collect_scorecard(),
         }
 
     def _collect_regime(self) -> Dict[str, Any]:
@@ -237,6 +286,8 @@ class DailyDigestService:
                 "rs_top_decile": row.get("rs_top_decile"),
                 "unusual_volume": row.get("unusual_volume"),
                 "sector_tailwind": row.get("sector_tailwind"),
+                "quiet_accumulation": row.get("quiet_accumulation"),
+                "beaten_down_reversal": row.get("beaten_down_reversal"),
             }
             for row in (snapshot.get("constituents") or [])[:10]
         ]
@@ -301,6 +352,46 @@ class DailyDigestService:
             "as_of": date.today().isoformat(),
             "top": top,
         })
+
+    def _collect_scorecard(self) -> Dict[str, Any]:
+        """Slim hit-rate scorecard stats for the web brief (fail-open).
+
+        No ``_*_section`` renderer reads this key, so the Telegram digest stays
+        byte-identical (regression-tested in tests/test_daily_brief.py).
+        ``as_of`` = the latest REAL flag's as_of date — the freshest gradeable
+        idea the system surfaced, matching the discovery card's freshness
+        semantics; falls back to the summary's generated_at date when only
+        simulated (bootstrap) rows exist.
+        """
+        try:
+            from src.services.scorecard_service import ScorecardService
+
+            summary = ScorecardService(db=self.db).build_summary()
+            real_flags = ((summary.get("real") or {}).get("baseline") or {}).get("flags") or 0
+            simulated = summary.get("simulated")
+            if not real_flags and not simulated:
+                return _apply_freshness({"status": "missing"})
+            as_of = None
+            if real_flags:
+                from src.services.scorecard_service import DEFAULT_LOOKBACK_DAYS
+
+                rows = self.db.get_discovery_flag_outcomes(
+                    simulated=False, limit=1, days=DEFAULT_LOOKBACK_DAYS
+                )["rows"]
+                as_of = rows[0]["as_of"] if rows else None
+            if not as_of:
+                as_of = str(summary.get("generated_at") or "")[:10] or None
+            return _apply_freshness({
+                "status": "completed",
+                "as_of": as_of,
+                "window_days": summary.get("window_days"),
+                "hit_threshold_pct": summary.get("hit_threshold_pct"),
+                "real": _slim_scorecard_population(summary.get("real")),
+                "simulated": _slim_scorecard_population(simulated) if simulated else None,
+            })
+        except Exception as exc:
+            logger.warning("Scorecard section failed: %s", exc)
+            return _apply_freshness({"status": "missing"})
 
     def _regime_history(self) -> List[Dict[str, Any]]:
         try:
@@ -492,7 +583,8 @@ class DailyDigestService:
     # ------------------------------------------------------------------ alerts
 
     def send_threshold_alerts(self, *, paper_result: Optional[Dict[str, Any]] = None) -> List[str]:
-        """Fire regime/VIX/paper alerts at most once per condition per day."""
+        """Fire regime/VIX/paper/discovery/watchlist/down-day alerts, each at
+        most once per condition (deduped via the persisted alert state)."""
         state = self._load_state()
         today = date.today().isoformat()
         alerts: List[str] = []
@@ -535,7 +627,11 @@ class DailyDigestService:
             )
 
         alerts.extend(self._cycle_and_rotation_alerts(state, today))
+        alerts.extend(self._discovery_high_conviction_alerts(state, today))
+        alerts.extend(self._watchlist_mover_alerts(state, today))
+        alerts.extend(self._down_day_trigger_alert(state, today))
 
+        _prune_dated_state(state)
         self._save_state(state)
         if alerts and self.notifier.is_available():
             self.notifier.send("# 🚨 Market alerts\n\n" + "\n\n".join(alerts), email_send_to_all=True)
@@ -588,6 +684,156 @@ class DailyDigestService:
             if top3:
                 state["rotation_top3_1m"] = top3
         return alerts
+
+    def _discovery_high_conviction_alerts(self, state: Dict[str, Any], today: str) -> List[str]:
+        """New high-conviction discovery ideas (both score gates), max 3 per day.
+
+        "New" = absent from the previous snapshot's qualifying set (all
+        qualifying rows count as new when no previous snapshot exists). A
+        symbol re-alerts at most once every 30 days via
+        state["discovery_high_conviction_on"][symbol] = as_of. Fail-open.
+        """
+        try:
+            from src.services.free_data_service import _env_float
+
+            history = self.db.get_discovery_history(days=7)
+            latest = history[-1] if history else None
+            if not latest or not _is_latest_us_session(latest.get("as_of")):
+                return []
+            as_of = str(latest.get("as_of"))[:10]
+            as_of_date = datetime.fromisoformat(as_of).date()
+            min_composite = _env_float("DISCOVERY_ALERT_MIN_COMPOSITE", 90.0)
+            min_candidate = _env_float("DISCOVERY_ALERT_MIN_CANDIDATE", 70.0)
+
+            def _qualifying(snapshot: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                return [
+                    row
+                    for row in (snapshot or {}).get("constituents") or []
+                    if (row.get("composite_score") or 0) >= min_composite
+                    and (row.get("candidate_score") or 0) >= min_candidate
+                ]
+
+            previous = history[-2] if len(history) >= 2 else None
+            previous_symbols = {
+                str(row.get("symbol") or "").strip().upper() for row in _qualifying(previous)
+            }
+            seen = state.setdefault("discovery_high_conviction_on", {})
+            fresh: List[Dict[str, Any]] = []
+            for row in _qualifying(latest):
+                symbol = str(row.get("symbol") or "").strip().upper()
+                if not symbol or symbol in previous_symbols:
+                    continue
+                if seen.get(symbol):
+                    try:
+                        last = datetime.fromisoformat(str(seen[symbol])[:10]).date()
+                        if (as_of_date - last).days < 30:
+                            continue
+                    except ValueError:
+                        pass
+                fresh.append(row)
+            fresh.sort(key=lambda row: -(row.get("composite_score") or 0))
+            alerts: List[str] = []
+            for row in fresh[:3]:
+                symbol = str(row.get("symbol") or "").strip().upper()
+                name = str(row.get("name") or "").strip()
+                name_text = f" ({name})" if name else ""
+                reason = row.get("reason") or "ranked by composite strength"
+                alerts.append(
+                    f"🎯 New high-conviction idea: {symbol}{name_text} — "
+                    f"composite {row.get('composite_score'):.0f}, "
+                    f"candidate {row.get('candidate_score'):.0f}. {reason}"
+                )
+                seen[symbol] = as_of
+            return alerts
+        except Exception as exc:
+            logger.warning("High-conviction discovery alerts failed (skipped): %s", exc)
+            return []
+
+    def _watchlist_mover_alerts(self, state: Dict[str, Any], today: str) -> List[str]:
+        """Big 1-day moves / volume surges on watchlist symbols, aggregated
+        into ONE message, once per symbol per session. Per-symbol fail-open."""
+        try:
+            from src.services.free_data_service import _env_float
+            from src.services.watchlist_service import WatchlistService
+
+            symbols = WatchlistService().get_symbols()
+            end = date.fromisoformat(today)
+        except Exception as exc:
+            logger.warning("Watchlist mover alerts failed (skipped): %s", exc)
+            return []
+        if not symbols:
+            return []
+        move_threshold = _env_float("WATCHLIST_MOVER_ALERT_PCT", 5.0)
+        volume_threshold = _env_float("WATCHLIST_MOVER_VOLUME_RATIO", 2.5)
+        seen = state.setdefault("watchlist_mover_on", {})
+        parts: List[str] = []
+        for symbol in symbols:
+            try:
+                bars = self.db.get_data_range(symbol, end - timedelta(days=45), end)
+                if len(bars) < 2 or not _is_latest_us_session(bars[-1].date):
+                    continue
+                bar_date = bars[-1].date.isoformat()
+                if seen.get(symbol) == bar_date:
+                    continue
+                closes = [bar.close for bar in bars]
+                volumes = [bar.volume for bar in bars]
+                move_pct = None
+                if closes[-1] and closes[-2]:
+                    move_pct = (closes[-1] / closes[-2] - 1) * 100
+                vol_ratio = None
+                baseline = [v for v in volumes[-21:-1] if v]
+                # A thin baseline (newly added symbol) makes the ratio noise.
+                if len(baseline) < 6:
+                    baseline = []
+                if volumes[-1] and baseline:
+                    average = sum(baseline) / len(baseline)
+                    if average > 0:
+                        vol_ratio = volumes[-1] / average
+                big_move = move_pct is not None and abs(move_pct) >= move_threshold
+                volume_surge = vol_ratio is not None and vol_ratio >= volume_threshold
+                if not big_move and not volume_surge:
+                    continue
+                text = symbol
+                if move_pct is not None:
+                    text += f" {move_pct:+.1f}%"
+                if volume_surge:
+                    text += f" on {vol_ratio:.1f}x volume"
+                parts.append(text)
+                seen[symbol] = bar_date
+            except Exception as exc:
+                logger.warning("Watchlist mover check failed for %s (skipped): %s", symbol, exc)
+        if not parts:
+            return []
+        return ["📈 Watchlist movers: " + "; ".join(parts)]
+
+    def _down_day_trigger_alert(self, state: Dict[str, Any], today: str) -> List[str]:
+        """One alert per triggered down-day session, with the top holding-up names."""
+        try:
+            snapshot = self.db.get_latest_down_day_rs_snapshot()
+        except Exception as exc:
+            logger.warning("Down-day trigger alert failed (skipped): %s", exc)
+            return []
+        if not snapshot or not snapshot.get("triggered"):
+            return []
+        as_of = str(snapshot.get("as_of") or "")[:10]
+        if not _is_latest_us_session(as_of) or state.get("down_day_alert_on") == as_of:
+            return []
+        spy = snapshot.get("spy_return_pct")
+        spy_text = f"{spy:+.2f}%" if spy is not None else "down"
+        # Best holders first: strongest outperformance vs SPY.
+        holders = sorted(
+            (snapshot.get("stocks_holding_up") or []),
+            key=lambda row: row.get("rs_vs_spy_pp") or 0,
+            reverse=True,
+        )
+        holding = ", ".join(
+            str(row.get("symbol")) for row in holders[:5] if row.get("symbol")
+        )
+        message = f"🔻 Down day: SPY {spy_text}"
+        if holding:
+            message += f" — holding up: {holding}"
+        state["down_day_alert_on"] = as_of
+        return [message]
 
     def _load_state(self) -> Dict[str, Any]:
         try:

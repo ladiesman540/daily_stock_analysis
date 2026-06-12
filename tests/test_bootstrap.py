@@ -257,11 +257,13 @@ class SnapshotPipelineTaskTestCase(unittest.TestCase):
         mock_run.assert_called_once()
 
     def test_task_skips_pipeline_when_not_due(self) -> None:
-        """When not due, pipeline doesn't run."""
+        """When not due, pipeline doesn't run; the intraday alert check fires instead."""
         with patch("main._snapshot_pipeline_due", return_value=False), \
-             patch("main._run_snapshot_pipeline") as mock_run:
+             patch("main._run_snapshot_pipeline") as mock_run, \
+             patch("main._intraday_threshold_alerts") as mock_alerts:
             main._snapshot_pipeline_task()
         mock_run.assert_not_called()
+        mock_alerts.assert_called_once()
 
 
 if __name__ == "__main__":

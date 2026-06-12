@@ -9,6 +9,7 @@ Steps run in order, each isolated so one failure does not kill the run:
   cycle     - business-cycle phase from FRED + crypto cycle gauge (reads rotation)
   signals   - run the signal scan over the US + crypto universes
   discovery - scan the liquidity-gated US stock universe for new (non-watchlist) ideas
+  scorecard - grade past discovery flags against the +20%-within-90-days hit gate
   analysis  - refresh the LLM analysis report for each RESEARCH_US_WATCHLIST symbol
   news      - score today's persisted headlines for market impact (one batched LLM call)
   portfolio - paper-trade the system's own recommendations and grade open positions
@@ -36,7 +37,7 @@ from src.config import setup_env  # noqa: E402
 
 logger = logging.getLogger("daily_snapshot")
 
-ALL_STEPS = ["breadth", "regime", "rotation", "cycle", "signals", "discovery", "analysis", "news", "portfolio", "backtest", "notify"]
+ALL_STEPS = ["breadth", "regime", "rotation", "cycle", "signals", "discovery", "scorecard", "analysis", "news", "portfolio", "backtest", "notify"]
 
 
 def run_breadth(context: dict) -> dict:
@@ -145,6 +146,12 @@ def run_discovery(context: dict) -> dict:
     return result
 
 
+def run_scorecard(context: dict) -> dict:
+    from src.services.scorecard_service import ScorecardService
+
+    return ScorecardService().run_daily_evaluation()
+
+
 def run_analysis(context: dict) -> dict:
     from analyzer_service import analyze_stocks
     from src.services.watchlist_service import WatchlistService
@@ -246,6 +253,7 @@ STEP_RUNNERS = {
     "cycle": run_cycle,
     "signals": run_signals,
     "discovery": run_discovery,
+    "scorecard": run_scorecard,
     "analysis": run_analysis,
     "news": run_news,
     "portfolio": run_portfolio,

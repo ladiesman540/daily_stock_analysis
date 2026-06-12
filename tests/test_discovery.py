@@ -39,14 +39,18 @@ def _teardown_db(tmp) -> None:
 
 
 def make_bars(*, n=300, start=50.0, drift=0.002, pattern=None, volume=1_000_000.0,
-              last_volume=None, end=END):
-    """Synthetic daily bars ending at `end`. `pattern(i)` overrides the constant drift."""
+              last_volume=None, volume_pattern=None, end=END):
+    """Synthetic daily bars ending at `end`. `pattern(i)` overrides the constant drift;
+    `volume_pattern(i)` overrides the constant volume (takes precedence over last_volume)."""
     bars = []
     price = start
     for i in range(n):
         ret = pattern(i) if pattern else drift
         price *= (1 + ret)
-        vol = last_volume if (last_volume is not None and i == n - 1) else volume
+        if volume_pattern:
+            vol = volume_pattern(i)
+        else:
+            vol = last_volume if (last_volume is not None and i == n - 1) else volume
         bars.append({
             "date": (end - timedelta(days=n - 1 - i)).isoformat(),
             "close": round(price, 6),
@@ -124,6 +128,98 @@ class TestScreenRow(unittest.TestCase):
         missing = self._row([])
         self.assertEqual(missing["status"], "missing")
         self.assertFalse(missing["qualified"])
+
+    # -------------------------------------------------- quiet accumulation
+
+    @staticmethod
+    def _flat_tail(i):
+        """Price rises, then goes dead flat over the last 5 sessions."""
+        return 0.003 if i < 295 else 0.0
+
+    @staticmethod
+    def _lifted_volume(i):
+        """Volume doubles over the last 5 sessions (sustained, not a spike)."""
+        return 2_000_000.0 if i >= 295 else 1_000_000.0
+
+    def test_quiet_accumulation_true_on_sustained_volume_flat_price(self):
+        row = self._row(make_bars(pattern=self._flat_tail, volume_pattern=self._lifted_volume))
+        self.assertTrue(row["quiet_accumulation"])
+        self.assertAlmostEqual(row["quiet_accum_volume_ratio"], 2.0, places=2)
+        # A 1.67x latest bar on a flat day is NOT the unusual-volume screen.
+        self.assertFalse(row["unusual_volume"])
+
+    def test_quiet_accumulation_false_without_flat_price(self):
+        # Same volume lift, but price keeps ripping (+1%/day -> ~5.1% over 5 sessions).
+        def rising_tail(i):
+            return 0.003 if i < 295 else 0.01
+        row = self._row(make_bars(pattern=rising_tail, volume_pattern=self._lifted_volume))
+        self.assertAlmostEqual(row["quiet_accum_volume_ratio"], 2.0, places=2)
+        self.assertFalse(row["quiet_accumulation"])
+
+    def test_quiet_accumulation_false_on_single_spike(self):
+        # One 3x day among 5 quiet ones averages 1.4x -- below the 1.5x gate.
+        row = self._row(make_bars(pattern=self._flat_tail, last_volume=3_000_000.0))
+        self.assertAlmostEqual(row["quiet_accum_volume_ratio"], 1.4, places=2)
+        self.assertFalse(row["quiet_accumulation"])
+
+    def test_quiet_accumulation_false_on_short_history(self):
+        # 25 bars < the 26 required (window*5 + 1): flag off, ratio not computed.
+        row = self._row(make_bars(n=25, pattern=self._flat_tail, volume_pattern=self._lifted_volume))
+        self.assertFalse(row["quiet_accumulation"])
+        self.assertIsNone(row["quiet_accum_volume_ratio"])
+        empty = self._row([])
+        self.assertFalse(empty["quiet_accumulation"])
+        self.assertIsNone(empty["quiet_accum_volume_ratio"])
+
+    # ----------------------------------------------- beaten-down reversal
+
+    @staticmethod
+    def _reversal_pattern(i):
+        """Rise, crash ~70% from the high, then a one-month recovery."""
+        if i < 150:
+            return 0.005
+        if i < 250:
+            return -0.012
+        return 0.004
+
+    def test_beaten_down_reversal_true(self):
+        row = self._row(make_bars(pattern=self._reversal_pattern, last_volume=1_500_000.0))
+        self.assertLessEqual(row["pct_of_52w_high"], 0.60)
+        self.assertGreater(row["rs_1m_pct"], 0)
+        self.assertGreaterEqual(row["volume_ratio"], 1.25)
+        self.assertTrue(row["beaten_down_reversal"])
+        # 1.5x participation is not the 2x unusual-volume screen.
+        self.assertFalse(row["unusual_volume"])
+
+    def test_beaten_down_reversal_false_when_not_beaten_down(self):
+        # Strong uptrend near its high: volume + RS gates pass, drawdown gate fails.
+        row = self._row(make_bars(drift=0.004, last_volume=1_500_000.0))
+        self.assertGreater(row["pct_of_52w_high"], 0.60)
+        self.assertFalse(row["beaten_down_reversal"])
+
+    def test_beaten_down_reversal_false_without_positive_rs(self):
+        # Still falling: deep drawdown + volume, but 1M RS is negative.
+        def falling(i):
+            return 0.005 if i < 150 else -0.008
+        row = self._row(make_bars(pattern=falling, last_volume=1_500_000.0))
+        self.assertLessEqual(row["pct_of_52w_high"], 0.60)
+        self.assertLess(row["rs_1m_pct"], 0)
+        self.assertFalse(row["beaten_down_reversal"])
+        # None-safe: no SPY benchmark -> RS unknown -> flag stays off.
+        no_spy = self._row(
+            make_bars(pattern=self._reversal_pattern, last_volume=1_500_000.0),
+            spy_perf_1m=None, spy_perf_3m=None,
+        )
+        self.assertIsNone(no_spy["rs_1m_pct"])
+        self.assertFalse(no_spy["beaten_down_reversal"])
+
+    def test_beaten_down_reversal_false_without_volume(self):
+        # Recovery on average (1.0x) volume: participation gate fails.
+        row = self._row(make_bars(pattern=self._reversal_pattern))
+        self.assertLessEqual(row["pct_of_52w_high"], 0.60)
+        self.assertGreater(row["rs_1m_pct"], 0)
+        self.assertLess(row["volume_ratio"], 1.25)
+        self.assertFalse(row["beaten_down_reversal"])
 
 
 class TestBuildSnapshot(unittest.TestCase):
@@ -224,6 +320,48 @@ class TestBuildSnapshot(unittest.TestCase):
         # The strongest grinder should outrank the decliner.
         self.assertLess(rows.index(next(r for r in rows if r["symbol"] == "STRN")),
                         rows.index(next(r for r in rows if r["symbol"] == "WEAK")))
+
+    def test_composite_scores_regression(self):
+        """Composite stays momentum-only: the new watch flags must not move it.
+
+        Expected values were captured from this exact fixture BEFORE the
+        quiet_accumulation / beaten_down_reversal screens were added.
+        """
+        payload = self.service.build_snapshot()
+        composites = {row["symbol"]: row["composite_score"] for row in payload["constituents"]}
+        self.assertEqual(
+            composites,
+            {"SECF": 75.0, "STRN": 66.67, "VOLX": 66.67, "SECT": 46.67, "WEAK": 0.0},
+        )
+        # None of the fixture names trips the new flags (no false positives).
+        for row in payload["constituents"]:
+            self.assertFalse(row["quiet_accumulation"])
+            self.assertFalse(row["beaten_down_reversal"])
+
+    def test_new_screen_flag_scored_outside_top_n(self):
+        """A flagged row below the composite top-N still gets the scorer language."""
+        def lifted_volume(i):
+            return 2_000_000.0 if i >= 295 else 1_000_000.0
+        # Slight downtrend + flat tail volume lift: quiet accumulation fires,
+        # but the momentum composite ranks it near the bottom.
+        self.histories["QUIE"] = history(
+            "QUIE", make_bars(start=30.0, drift=-0.0005, volume_pattern=lifted_volume)
+        )
+        self.universe.append("QUIE")
+        service = self._make_service()
+        with patch("src.services.discovery_service.SCORED_TOP_N", 2):
+            payload = service.build_snapshot()
+        by_symbol = {row["symbol"]: row for row in payload["constituents"]}
+        quie = by_symbol["QUIE"]
+        self.assertTrue(quie["quiet_accumulation"])
+        self.assertGreater(quie["rank"], 2)  # outside the scored top-N
+        self.assertIn("candidate_score", quie)
+        self.assertIn("quiet accumulation", quie["reason"])
+        # Unflagged rows outside the top-N stay unscored.
+        weak = by_symbol["WEAK"]
+        self.assertGreater(weak["rank"], 2)
+        self.assertFalse(weak["quiet_accumulation"] or weak["beaten_down_reversal"])
+        self.assertNotIn("candidate_score", weak)
 
     def test_sector_bonus_raises_composite(self):
         with_bonus = {r["symbol"]: r for r in self.service.build_snapshot()["constituents"]}
@@ -390,7 +528,8 @@ class TestDigestDiscoverySection(unittest.TestCase):
             "constituents": [
                 {"symbol": f"SYM{i}", "rank": i + 1, "composite_score": 90 - i,
                  "candidate_score": 80 - i, "checklist_status": "watchlist",
-                 "reason": f"reason {i}"}
+                 "reason": f"reason {i}",
+                 "quiet_accumulation": i == 0, "beaten_down_reversal": i == 1}
                 for i in range(7)
             ],
             "summary": "test",
@@ -399,6 +538,10 @@ class TestDigestDiscoverySection(unittest.TestCase):
         self.assertEqual(brief["discovery"]["status"], "completed")
         self.assertEqual(brief["discovery"]["freshness"], "fresh")
         self.assertEqual(len(brief["discovery"]["top"]), 7)
+        # The new watch flags ride along for the web Today card badges.
+        self.assertTrue(brief["discovery"]["top"][0]["quiet_accumulation"])
+        self.assertFalse(brief["discovery"]["top"][0]["beaten_down_reversal"])
+        self.assertTrue(brief["discovery"]["top"][1]["beaten_down_reversal"])
         lines = self.service._discovery_section(brief["discovery"])
         rendered = "\n".join(lines)
         self.assertIn("## New ideas", rendered)

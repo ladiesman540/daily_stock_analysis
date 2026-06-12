@@ -505,6 +505,48 @@ class DownDayRsDaily(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
 
+class DiscoveryFlagOutcome(Base):
+    """Forward outcome of one discovery flag (the hit-rate scorecard row).
+
+    One row per (as_of, symbol, simulated): did the flagged name close at/above
+    +hit_threshold_pct within window_days calendar days (hit), at/below
+    flop_threshold_pct first (flop), neither before the window plus slack
+    ran out (expired), or is the window still running (open)?
+    """
+
+    __tablename__ = "discovery_flag_outcomes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    as_of = Column(Date, nullable=False, index=True)
+    symbol = Column(String(16), nullable=False, index=True)
+    entry_close = Column(Float)
+    composite_score = Column(Float)
+    candidate_score = Column(Float)
+    # JSON list of passed screen keys (e.g. ["near_52w_high"]); future screens
+    # need no schema change.
+    screens_json = Column(Text)
+    simulated = Column(Boolean, default=False, index=True)
+    status = Column(String(12), nullable=False, default="open", index=True)  # open|hit|flop|expired
+    hit_date = Column(Date)
+    days_to_hit = Column(Integer)
+    max_gain_pct = Column(Float)
+    current_return_pct = Column(Float)
+    last_eval_bar_date = Column(Date)
+    window_days = Column(Integer, default=90)
+    hit_threshold_pct = Column(Float, default=20.0)
+    flop_threshold_pct = Column(Float, default=-20.0)
+    created_at = Column(DateTime, default=datetime.now, index=True)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "as_of", "symbol", "simulated",
+            name="uix_discovery_flag_outcomes_as_of_symbol_simulated",
+        ),
+        Index("ix_discovery_flag_outcomes_status_simulated", "status", "simulated"),
+    )
+
+
 class WatchlistSymbol(Base):
     """US watchlist symbols managed via the DB (replaces RESEARCH_US_WATCHLIST env var)."""
 
@@ -2279,6 +2321,144 @@ class DatabaseManager:
             ).scalars().all()
             return [_discovery_daily_to_dict(row) for row in rows]
 
+    def get_earliest_discovery_as_of(self) -> Optional[str]:
+        """ISO date of the oldest persisted discovery snapshot (None when empty).
+
+        The scorecard bootstrap samples simulated as-of dates strictly before
+        this date so simulated history never overlaps real snapshots.
+        """
+        with self.get_session() as session:
+            value = session.execute(select(func.min(DiscoveryDaily.as_of))).scalar_one_or_none()
+            return value.isoformat() if value else None
+
+    def upsert_discovery_flag_outcomes(self, rows: List[Dict[str, Any]]) -> int:
+        """Bulk upsert scorecard outcome rows on (as_of, symbol, simulated), preserving created_at.
+
+        Each row carries plain values (dates as ISO strings or date objects,
+        screens as a list); rows without as_of/symbol are skipped.
+        """
+        now = datetime.now()
+        records: List[Dict[str, Any]] = []
+        for row in rows or []:
+            as_of_value = self._normalize_daily_date(row.get("as_of"))
+            symbol = str(row.get("symbol") or "").strip().upper()
+            if as_of_value is None or not symbol:
+                continue
+            hit_date = row.get("hit_date")
+            last_eval = row.get("last_eval_bar_date")
+            records.append({
+                "as_of": as_of_value,
+                "symbol": symbol,
+                "entry_close": row.get("entry_close"),
+                "composite_score": row.get("composite_score"),
+                "candidate_score": row.get("candidate_score"),
+                "screens_json": json.dumps(row.get("screens") or [], ensure_ascii=False),
+                "simulated": bool(row.get("simulated")),
+                "status": str(row.get("status") or "open"),
+                "hit_date": self._normalize_daily_date(hit_date) if hit_date else None,
+                "days_to_hit": row.get("days_to_hit"),
+                "max_gain_pct": row.get("max_gain_pct"),
+                "current_return_pct": row.get("current_return_pct"),
+                "last_eval_bar_date": self._normalize_daily_date(last_eval) if last_eval else None,
+                "window_days": int(row.get("window_days") or 90),
+                "hit_threshold_pct": float(row["hit_threshold_pct"]) if row.get("hit_threshold_pct") is not None else 20.0,
+                "flop_threshold_pct": float(row["flop_threshold_pct"]) if row.get("flop_threshold_pct") is not None else -20.0,
+                "created_at": now,
+                "updated_at": now,
+            })
+        if not records:
+            return 0
+
+        def _write(session: Session) -> int:
+            if self._is_sqlite_engine:
+                for record in records:
+                    stmt = sqlite_insert(DiscoveryFlagOutcome).values(record)
+                    update_cols = {
+                        key: getattr(stmt.excluded, key)
+                        for key in record
+                        if key not in {"as_of", "symbol", "simulated", "created_at"}
+                    }
+                    session.execute(stmt.on_conflict_do_update(
+                        index_elements=["as_of", "symbol", "simulated"], set_=update_cols,
+                    ))
+            else:
+                for record in records:
+                    existing = session.execute(
+                        select(DiscoveryFlagOutcome).where(
+                            DiscoveryFlagOutcome.as_of == record["as_of"],
+                            DiscoveryFlagOutcome.symbol == record["symbol"],
+                            DiscoveryFlagOutcome.simulated == record["simulated"],
+                        )
+                    ).scalar_one_or_none()
+                    if existing is None:
+                        session.add(DiscoveryFlagOutcome(**record))
+                    else:
+                        for key, value in record.items():
+                            if key in {"as_of", "symbol", "simulated", "created_at"}:
+                                continue
+                            setattr(existing, key, value)
+            return len(records)
+
+        return self._run_write_transaction("upsert_discovery_flag_outcomes", _write)
+
+    def get_discovery_flag_outcomes(
+        self,
+        *,
+        status: Optional[str] = None,
+        simulated: Optional[bool] = None,
+        screen: Optional[str] = None,
+        days: Optional[int] = None,
+        limit: Optional[int] = None,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """Filtered scorecard outcome rows (newest first) plus the pre-pagination total."""
+        conditions = []
+        if days is not None:
+            cutoff = date.today() - timedelta(days=max(1, days))
+            conditions.append(DiscoveryFlagOutcome.as_of >= cutoff)
+        if status:
+            conditions.append(DiscoveryFlagOutcome.status == str(status))
+        if simulated is not None:
+            conditions.append(DiscoveryFlagOutcome.simulated == bool(simulated))
+        if screen:
+            # Match the exact quoted JSON token; escape LIKE wildcards so
+            # underscores in screen keys stay literal.
+            token = json.dumps(str(screen), ensure_ascii=False)
+            escaped = token.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            conditions.append(DiscoveryFlagOutcome.screens_json.like(f"%{escaped}%", escape="\\"))
+        with self.get_session() as session:
+            count_stmt = select(func.count()).select_from(DiscoveryFlagOutcome)
+            if conditions:
+                count_stmt = count_stmt.where(and_(*conditions))
+            total = session.execute(count_stmt).scalar_one()
+            stmt = select(DiscoveryFlagOutcome)
+            if conditions:
+                stmt = stmt.where(and_(*conditions))
+            stmt = stmt.order_by(desc(DiscoveryFlagOutcome.as_of), DiscoveryFlagOutcome.symbol)
+            if offset:
+                stmt = stmt.offset(max(0, offset))
+            if limit is not None:
+                stmt = stmt.limit(max(0, limit))
+            rows = session.execute(stmt).scalars().all()
+            return {
+                "total": int(total or 0),
+                "rows": [_discovery_flag_outcome_to_dict(row) for row in rows],
+            }
+
+    def get_open_discovery_flag_symbols(self, *, simulated: bool = False) -> List[str]:
+        """Distinct symbols with at least one open scorecard flag (catch-up fetch candidates)."""
+        with self.get_session() as session:
+            rows = session.execute(
+                select(DiscoveryFlagOutcome.symbol)
+                .where(
+                    DiscoveryFlagOutcome.status == "open",
+                    DiscoveryFlagOutcome.simulated == bool(simulated),
+                )
+                .distinct()
+                .order_by(DiscoveryFlagOutcome.symbol)
+            ).scalars().all()
+            return [str(symbol) for symbol in rows]
+
     def save_down_day_rs_snapshot(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Save or update one down-day relative-strength snapshot per as-of date."""
         as_of_value = self._normalize_daily_date(payload.get("as_of") or date.today())
@@ -3097,6 +3277,30 @@ def _discovery_daily_to_dict(row: DiscoveryDaily) -> Dict[str, Any]:
         "warnings": _json_loads(row.warnings_json, []),
         "summary": row.summary,
         "generated_at": row.generated_at.isoformat() if row.generated_at else None,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _discovery_flag_outcome_to_dict(row: DiscoveryFlagOutcome) -> Dict[str, Any]:
+    return {
+        "id": row.id,
+        "as_of": row.as_of.isoformat() if row.as_of else None,
+        "symbol": row.symbol,
+        "entry_close": row.entry_close,
+        "composite_score": row.composite_score,
+        "candidate_score": row.candidate_score,
+        "screens": _json_loads(row.screens_json, []),
+        "simulated": bool(row.simulated),
+        "status": row.status,
+        "hit_date": row.hit_date.isoformat() if row.hit_date else None,
+        "days_to_hit": row.days_to_hit,
+        "max_gain_pct": row.max_gain_pct,
+        "current_return_pct": row.current_return_pct,
+        "last_eval_bar_date": row.last_eval_bar_date.isoformat() if row.last_eval_bar_date else None,
+        "window_days": row.window_days,
+        "hit_threshold_pct": row.hit_threshold_pct,
+        "flop_threshold_pct": row.flop_threshold_pct,
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
     }

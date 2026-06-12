@@ -710,7 +710,7 @@ def _build_schedule_time_provider(default_schedule_time: str):
 _SNAPSHOT_SCHEDULE_TIME_DEFAULT = "15:10"
 
 
-def _snapshot_schedule_time() -> "datetime_time":
+def _snapshot_schedule_time() -> "datetime.time":
     from datetime import time as datetime_time
 
     raw = (os.getenv("SNAPSHOT_SCHEDULE_TIME") or _SNAPSHOT_SCHEDULE_TIME_DEFAULT).strip()
@@ -772,9 +772,16 @@ def _run_snapshot_pipeline() -> None:
 def _snapshot_pipeline_task() -> None:
     """Background-task wrapper: run the pipeline only when due. Fail-open."""
     try:
-        if not _snapshot_pipeline_due():
-            _catch_up_news_scoring()
-            return
+        due = _snapshot_pipeline_due()
+    except Exception as exc:
+        # A failed due-check must not silence the per-tick helpers below.
+        logger.warning("Snapshot due-check failed (treating as not due): %s", exc)
+        due = False
+    if not due:
+        _catch_up_news_scoring()
+        _intraday_threshold_alerts()
+        return
+    try:
         logger.info("Routine snapshot pipeline due — running now")
         _run_snapshot_pipeline()
     except Exception as exc:
@@ -793,6 +800,23 @@ def _catch_up_news_scoring() -> None:
             logger.info("News impact catch-up scored %s headline(s)", result["scored"])
     except Exception as exc:
         logger.warning("News impact catch-up failed (skipped): %s", exc)
+
+
+def _intraday_threshold_alerts() -> None:
+    """Fire threshold alerts (regime/VIX, discovery high-conviction, watchlist
+    movers, down-day trigger) on the 30-minute tick between snapshot runs,
+    decoupling alerting from the daily notify step. Every condition is deduped
+    via data/alert_state.json, so re-running never spams. Fail-open."""
+    if os.getenv("ALERTS_INTRADAY_ENABLED", "true").strip().lower() in ("0", "false", "no", "off"):
+        return
+    try:
+        from src.services.daily_digest import DailyDigestService
+
+        alerts = DailyDigestService().send_threshold_alerts()
+        if alerts:
+            logger.info("Intraday threshold alerts fired: %d", len(alerts))
+    except Exception as exc:
+        logger.warning("Intraday threshold alerts failed (skipped): %s", exc)
 
 
 def main() -> int:
