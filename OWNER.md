@@ -38,6 +38,10 @@ snapshot fills in. The old single-stock analyzer moved to `/analyze`.
 just these). `./dsa doctor` reports the age of the latest discovery/down-day snapshots and
 today's scored-headline count under "Snapshot outputs".
 
+One-time setup: `python3 scripts/scorecard_bootstrap.py` (~10-15 min, resumable) backfills a
+simulated scorecard history by replaying the discovery screens over past dates — clearly
+labeled simulated, never merged with real hit rates (`--dry-run` previews the dates first).
+
 ## My configuration
 
 The entire active config is **17 variables** in `.env` (template: `.env.owner.example`).
